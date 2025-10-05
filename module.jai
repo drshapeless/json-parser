@@ -12,19 +12,18 @@ Json_Type :: enum u8 {
 Json_Value :: struct {
     type: Json_Type;
     raw_string: string;
-    parent: *Json_Object;
     union {
         boolean: bool;
         number: float64;
         str: string;
-        array: []Json_Value;
-        object: Json_Object;
+        array: [..]*Json_Value;
+        object: *Json_Object;
     }
 }
 
 Key_Value :: struct {
     key: string;
-    value: Json_Value;
+    value: *Json_Value;
 }
 
 Json_Object :: struct {
@@ -128,104 +127,195 @@ tokenize :: (s: string) -> []Token {
     return tokens;
 }
 
-parse_json :: (s: string) -> Json_Value, ok:bool {
+Parse_State :: enum {
+    UNINIT;
+    KEY;
+    COLON;
+    VALUE;
+    COMMA_OR_END;
+}
+
+Parse_Result :: enum {
+    OK;
+    EXPECT_OBJECT_OR_ARRAY;
+    EXPECT_KEY;
+    EXPECT_COLON;
+    EXPECT_VALUE;
+    EXPECT_COMMA;
+    ERROR_PARSING_NUMBER;
+    ERROR_MISMATCH_BRACE;
+    ERROR_MISMATCH_SQUARE_BRACKET;
+}
+
+parse_json :: (s: string) -> Json_Value, Parse_Result {
     tokens := tokenize(s);
 
-    root: Json_Value;
-    root.type = .NULL;
+    root := New(Json_Value);
 
-    current_key := "";
-    current_value: Json_Value;
-    current_array: [..] Json_Value;
-    current_object: *Json_Object;
+    stack: [..]*Json_Value;
 
-    is_key := false;
-    is_object := false;
-    is_array := false;
+    array_add(*stack, root);
+
+    current_key_value: Key_Value;
+
+    state: Parse_State;
 
     for tokens {
-        if root.type == .NULL {
-            if it.type == {
-            case .OPEN_BRACE;
+        if stack.count == 0 {
+            break;
+        }
+
+        if #complete state == {
+        case .UNINIT;
+            if it.type == .OPEN_BRACE {
                 root.type = .OBJECT;
                 root.raw_string = it.raw_string;
-                is_object = true;
-                is_key = true;
-                current_object = *root.object;
-            case .OPEN_SQUARE_BRACKET;
+                root.object = New(Json_Object);
+                state = .KEY;
+            } else if it.type == .OPEN_SQUARE_BRACKET {
                 root.type = .ARRAY;
                 root.raw_string = it.raw_string;
-                is_array = true;
-            case;
-                log("The root node is neither an object or an array.");
-                return .{}, false;
+                // root.array = .{};
+                state = .VALUE;
+            } else {
+                // format error
+                return .{}, .EXPECT_OBJECT_OR_ARRAY;
             }
-        } else if is_key {
-            if it.type != .QUOTED_STRING {
-                log("Format error at pos %", it.raw_string.data - s.data);
-                return .{}, false;
+        case .KEY;
+            if it.type == .QUOTED_STRING {
+                current_key_value.key = unquote(it.raw_string);
+                state = .COLON;
+            } else {
+                return .{}, .EXPECT_KEY;
             }
-
-            current_key = unquote(it.raw_string);
-            is_key = false;
-        } else {
-            if #complete it.type == {
-            case .OPEN_BRACE;
-                ;
-            case .CLOSE_BRACE;
-                ;
-            case .COLON;
-                ;
+        case .COLON;
+            if it.type == .COLON {
+                state = .VALUE;
+            } else {
+                return .{}, .EXPECT_COLON;
+            }
+        case .COMMA_OR_END;
+            if it.type == {
             case .COMMA;
-                ;
-            case .QUOTED_STRING;
-                current_value.type = .STRING;
-                current_value.raw_string = it.raw_string;
-                current_value.str = unquote(it.raw_string);
-                current_value.parent = current_object;
-                if is_object {
-                    kv := Key_Value.{
-                        key = current_key,
-                        value = current_value,
-                    };
-                    array_add(*current_object.contents, kv);
-
-                    current_key = .{};
-                    current_value = .{};
-                    is_key = true;
-                } else if is_array {
-                    array_add(*current_array, current_value);
-                    current_value = .{};
-                } else {
-                    assert(false, "Something is very wrong!");
+                // TODO: Check if it is a trailing comma, now it does
+                // not support trailing comma.
+                parent := peek(stack);
+                if parent.type == {
+                case .OBJECT;
+                    state = .KEY;
+                case .ARRAY;
+                    state = .VALUE;
                 }
-            case .UNQUOTED_STRING;
-                current_value = parse_non_string(it.raw_string);
-                if is_object {
-                    kv := Key_Value.{
-                        key = current_key,
-                        value = current_value,
-                    };
-                    array_add(*current_object.contents, kv);
+            case .CLOSE_BRACE;
+                parent := peek(stack);
+                if parent.type == .OBJECT {
+                    parent.raw_string.count = it.raw_string.data - parent.raw_string.data + 1;
+                    pop(*stack);
 
-                    current_key = .{};
-                    current_value = .{};
-                    is_key = true;
-                } else if is_array {
-                    array_add(*current_array, current_value);
-                    current_value = .{};
+                    // Just poping the stack is enough, because the
+                    // state is still .COMMA_OR_END when we finish a
+                    // value.
                 } else {
-                    assert(false, "Something is very wrong!");
+                    return .{}, .ERROR_MISMATCH_BRACE;
                 }
-            case .OPEN_SQUARE_BRACKET;
-                ;
             case .CLOSE_SQUARE_BRACKET;
-                ;
+                parent := peek(stack);
+                if parent.type == .ARRAY {
+                    parent.raw_string.count = it.raw_string.data - parent.raw_string.data + 1;
+                    pop(*stack);
+                } else {
+                    return .{}, .ERROR_MISMATCH_SQUARE_BRACKET;
+                }
+            case;
+                return .{}, .EXPECT_COMMA;
+            } ;
+        case .VALUE;
+            if it.type == {
+            case .QUOTED_STRING;
+                v := New(Json_Value);
+                v.type = .STRING;
+                v.raw_string = it.raw_string;
+                v.str = unquote(it.raw_string);
+
+                parent := peek(stack);
+                if parent.type == .OBJECT {
+                    current_key_value.value = v;
+                    array_add(*parent.object.contents, current_key_value);
+                    current_key_value = .{};
+                } else if parent.type == .ARRAY {
+                    array_add(*parent.array, v);
+                } else {
+                    assert(false);
+                }
+
+                state = .COMMA_OR_END;
+
+            case .UNQUOTED_STRING;
+                v, ok := parse_non_string(it.raw_string);
+                if !ok {
+                    return .{}, .ERROR_PARSING_NUMBER;
+                }
+
+                parent := peek(stack);
+                if parent.type == {
+                case .OBJECT;
+                    current_key_value.value = v;
+                    array_add(*parent.object.contents, current_key_value);
+                    current_key_value = .{};
+                case .ARRAY;
+                    array_add(*parent.array, v);
+                case;
+                    assert(false);
+                }
+
+                state = .COMMA_OR_END;
+
+            case .OPEN_BRACE;
+                v := New(Json_Value);
+                v.type = .OBJECT;
+                v.raw_string = it.raw_string;
+                v.object = New(Json_Object);
+
+                parent := peek(stack);
+                if parent.type == {
+                case .OBJECT;
+                    current_key_value.value = v;
+                    array_add(*parent.object.contents, current_key_value);
+                    current_key_value = .{};
+                case .ARRAY;
+                    array_add(*parent.array, v);
+                case;
+                    assert(false);
+                }
+
+                array_add(*stack, v);
+                state = .KEY;
+
+            case .OPEN_SQUARE_BRACKET;
+                v := New(Json_Value);
+                v.type = .ARRAY;
+                v.raw_string = it.raw_string;
+                // v.array = .{};
+
+                parent := peek(stack);
+                if parent.type == {
+                case .OBJECT;
+                    current_key_value.value = v;
+                    array_add(*parent.object.contents, current_key_value);
+                    current_key_value = .{};
+                case .ARRAY;
+                    array_add(*parent.array, v);
+                case;
+                    assert(false);
+                }
+
+                array_add(*stack, v);
+                state = .VALUE;
             }
         }
     }
 
-    return root, true;
+    return root, .OK;
 }
 
 unquote :: (s: string) -> string {
@@ -238,39 +328,34 @@ unquote :: (s: string) -> string {
     return s;
 }
 
-parse_non_string :: (s: string) -> Json_Value {
+parse_non_string :: (s: string) -> *Json_Value, ok:bool {
+    v := New(Json_Value);
     if s ==  {
     case "true";
-        return .{
-            type = .BOOLEAN,
-            raw_string = s,
-            boolean = true,
-        };
+        v.type = .BOOLEAN;
+        v.raw_string = s;
+        v.boolean = true;
     case "false";
-        return .{
-            type = .BOOLEAN,
-            raw_string = s,
-            boolean = false,
-        };
+        v.type = .BOOLEAN;
+        v.raw_string = s;
+        v.boolean = false;
     case "null";
-        return .{
-            type = .NULL,
-            raw_string = s,
-        };
+        v.type = .NULL;
+        v.raw_string = s;
     case;
-    // Should be number.
+        // Should be number.
         num, ok := string_to_float64(s);
         if !ok {
-            log("Format error, % is not a valid number", s);
-            return .{};
+            free(v);
+            return null, false;
         }
 
-        return .{
-            type = .NUMBER,
-            raw_string = s,
-            number = num,
-        };
+        v.type = .NUMBER;
+        v.raw_string = s;
+        v.number = num;
     }
+
+    return v, true;
 }
 
 #scope_file
