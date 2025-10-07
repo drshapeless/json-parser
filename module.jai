@@ -88,22 +88,100 @@ json_get :: (value: *Json_Value, key: string) -> *Json_Value {
     return null;
 }
 
-// TODO: WIP
-to_json :: (obj: $T) -> *Json_Value, ok:bool {
-    ti := type_info(T);
+// This is stupid, I think there must be a built-in way to do this kind of thing.
+get_number_type :: (ti: *Type_Info) -> Type {
+    if ti.type == {
+    case .INTEGER;
+        t := cast(*Type_Info_Integer)ti;
+        if t.signed {
+            if ti.runtime_size == {
+            case 8;
+                return s8;
+            case 16;
+                return s16;
+            case 32;
+                return s32;
+            case 64;
+                return s64;
+            }
+        } else {
+            if ti.runtime_size == {
+            case 8;
+                return u8;
+            case 16;
+                return u16;
+            case 32;
+                return u32;
+            case 64;
+                return u64;
+            }
+        }
+    case .FLOAT;
+        if ti.runtime_size == {
+        case 32;
+            return float32;
+        case 64;
+            return float64;
+        }
+    }
 
+    return int;
+}
+
+// TODO: WIP
+to_json :: (obj: *void, ti: *Type_Info) -> *Json_Value, ok:bool {
     root := New(Json_Value);
 
     if ti.type == {
+    case .INTEGER;
+        root.type = .NUMBER;
+        // Really? So ugly.
+        t :Type = #run get_number_type(ti);
+        root.number = xx (cast(*t)obj).*;
+    case .FLOAT;
+        root.type = .NUMBER;
+        root.number = xx (cast(*get_number_type(ti))obj).*;
+    case .BOOL;
+        root.type = .BOOLEAN;
+        root.boolean = obj.*;
     case .STRUCT;
-        ;
+        root.type = .OBJECT;
+        root.object = New(Json_Value);
+        for ti.members {
+            kv: Key_Value;
+            kv.key = it.name;
+
+            v, ok := to_json(cast(*u8)obj + it.offset_in_bytes, it.type);
+            if !ok {
+                free(root);
+                return null, false;
+            }
+            kv.value = v;
+
+            array_add(*root.object.contents, kv);
+        }
     case .ARRAY;
-        ;
-    case .POINTER;
-        ;
+        root.type = .ARRAY;
+        for ti.members {
+            v, ok := to_json(cast(*u8)obj + it.offset_in_bytes, it.type);
+            if !ok {
+                free(root);
+                return null, false;
+            }
+
+            array_add(*root.array, v);
+        }
+    case;
+        return null, false;
     }
 
     return root, true;
+}
+
+to_json :: (obj: *$T) -> *Json_Value, ok:bool {
+    ti := type_info(T);
+
+    return to_json(obj, ti);
 }
 
 Parse_Result :: enum {
