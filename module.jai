@@ -75,6 +75,12 @@ json_print :: (sb: *String_Builder, value: *Json_Value) {
     }
 }
 
+json_print :: (value: *Json_Value) {
+    sb: String_Builder;
+    json_print(*sb, value);
+    write_builder(*sb);
+}
+
 // Return null if nothing is matched.
 json_get :: (value: *Json_Value, key: string) -> *Json_Value {
     if value.type != .OBJECT return null;
@@ -89,69 +95,73 @@ json_get :: (value: *Json_Value, key: string) -> *Json_Value {
 }
 
 // This is stupid, I think there must be a built-in way to do this kind of thing.
-get_number_type :: (ti: *Type_Info) -> Type {
+get_float :: (data: *void, ti: *Type_Info) -> float64 {
+    val: float64;
     if ti.type == {
     case .INTEGER;
         t := cast(*Type_Info_Integer)ti;
         if t.signed {
             if ti.runtime_size == {
             case 8;
-                return s8;
+                val = xx (cast(*s8)data).*;
             case 16;
-                return s16;
+                val = xx (cast(*s16)data).*;
             case 32;
-                return s32;
+                val = xx (cast(*s32)data).*;
             case 64;
-                return s64;
+                val = xx (cast(*s64)data).*;
             }
         } else {
             if ti.runtime_size == {
             case 8;
-                return u8;
+                val = xx (cast(*u8)data).*;
             case 16;
-                return u16;
+                val = xx (cast(*u16)data).*;
             case 32;
-                return u32;
+                val = xx (cast(*u32)data).*;
             case 64;
-                return u64;
+                val = xx (cast(*u64)data).*;
             }
         }
     case .FLOAT;
         if ti.runtime_size == {
         case 32;
-            return float32;
+            val = xx (cast(*float32)data).*;
         case 64;
-            return float64;
+            val = (cast(*float64)data).*;
         }
     }
 
-    return int;
+    return val;
 }
 
-// TODO: WIP
-to_json :: (obj: *void, ti: *Type_Info) -> *Json_Value, ok:bool {
+// From Jai data type to json, only bool, int, float, string, struct and array
+// are supported.
+to_json :: (data: *void, ti: *Type_Info) -> *Json_Value, ok:bool {
     root := New(Json_Value);
 
     if ti.type == {
     case .INTEGER;
-        root.type = .NUMBER;
-        // Really? So ugly.
-        t :Type = #run get_number_type(ti);
-        root.number = xx (cast(*t)obj).*;
+        #through;
     case .FLOAT;
         root.type = .NUMBER;
-        root.number = xx (cast(*get_number_type(ti))obj).*;
+        // Really? So ugly.
+        root.number = get_float(data, ti);
     case .BOOL;
         root.type = .BOOLEAN;
-        root.boolean = obj.*;
+        root.boolean = (cast(*bool)data).*;
+    case .STRING;
+        root.type = .STRING;
+        root.str = (cast(*string)data).*;
     case .STRUCT;
+        t := cast(*Type_Info_Struct)ti;
         root.type = .OBJECT;
-        root.object = New(Json_Value);
-        for ti.members {
+        root.object = .{};
+        for t.members {
             kv: Key_Value;
             kv.key = it.name;
 
-            v, ok := to_json(cast(*u8)obj + it.offset_in_bytes, it.type);
+            v, ok := to_json(cast(*u8)data + it.offset_in_bytes, it.type);
             if !ok {
                 free(root);
                 return null, false;
@@ -161,9 +171,12 @@ to_json :: (obj: *void, ti: *Type_Info) -> *Json_Value, ok:bool {
             array_add(*root.object.contents, kv);
         }
     case .ARRAY;
+        t := cast(*Type_Info_Array)ti;
         root.type = .ARRAY;
-        for ti.members {
-            v, ok := to_json(cast(*u8)obj + it.offset_in_bytes, it.type);
+
+        arr_view := cast(*Array_View_64)data;
+        for 0..arr_view.count - 1 {
+            v, ok := to_json(cast(*u8)arr_view.data + t.element_type.runtime_size * it, t.element_type);
             if !ok {
                 free(root);
                 return null, false;
@@ -181,7 +194,8 @@ to_json :: (obj: *void, ti: *Type_Info) -> *Json_Value, ok:bool {
 to_json :: (obj: *$T) -> *Json_Value, ok:bool {
     ti := type_info(T);
 
-    return to_json(obj, ti);
+    j, success := to_json(obj, ti);
+    return j, success;
 }
 
 Parse_Result :: enum {
