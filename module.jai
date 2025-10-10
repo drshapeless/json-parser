@@ -680,5 +680,60 @@ parse_non_string :: (s: string) -> *Json_Value, ok:bool {
     return v, true;
 }
 
+unescape :: (s: string) -> string, success:bool {
+    arr: [..]u8;
+    defer array_free(arr);
+
+    i := 0;
+    while i < s.count {
+        c := s[i];
+        if c == #char "\"" {
+            i += 1;
+            if i < s.count {
+                if s[i] == {
+                case #char "\\";
+                    array_add(*arr, "\\");
+                case #char "\"";
+                    array_add(*arr, "\"");
+                case #char "/";
+                    // This is an optional escape in json.
+                    array_add(*arr, "/");
+                case #char "b";
+                    // Backspace, rarely use.
+                    array_add(*arr, "\b");
+                case #char "f";
+                    array_add(*arr, "\f");
+                case #char "n";
+                    array_add(*arr, "\n");
+                case #char "r";
+                    array_add(*arr, "\r");
+                case #char "t";
+                    array_add(*arr, "\t");
+                case #char "u";
+                    // Nightmare
+                    // To parse this, we have to ensure the next 4 chars are hex.
+                    if i + 4 >= s.count {
+                        return "", false;
+                    }
+                    result, success := string_to_int(slice(s, i + 1, 4), 16, u16);
+                    if !success {
+                        return "", false;
+                    }
+
+                // TODO: WIP
+                }
+            }
+        } else {
+            array_add(*arr, c);
+        }
+
+        i += 1;
+    }
+
+    str := cast(string)(array_copy(arr));
+
+    return str, true;
+}
+
 #import "Basic";
 #import "String";
