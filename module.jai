@@ -140,14 +140,15 @@ to_json :: (data: *void, ti: *Type_Info) -> *Json_Value, ok:bool {
         root.boolean = (cast(*bool)data).*;
     case .STRING;
         root.type = .STRING;
-        root.str = (cast(*string)data).*;
+        root.str = escape((cast(*string)data).*);
     case .STRUCT;
         t := cast(*Type_Info_Struct)ti;
         root.type = .OBJECT;
         root.object = .{};
         for t.members {
             kv: Key_Value;
-            kv.key = it.name;
+            // Assume the member name is an ascii string.
+            kv.key = copy_string(it.name);
 
             v, ok := to_json(cast(*u8)data + it.offset_in_bytes, it.type);
             if !ok {
@@ -247,7 +248,6 @@ from_json :: (value: *Json_Value, data: *void, ti: *Type_Info) -> Json_Result {
         }
     case .STRING;
         if value.type == .STRING {
-            // Allocating a new string.
             (cast(*string)data).* = copy_string(value.str);
             return .OK;
         } else {
@@ -377,7 +377,7 @@ parse_json :: (s: string) -> *Json_Value, Json_Result {
             }
         case .KEY;
             if it.type == .QUOTED_STRING {
-                current_key_value.key = unquote(it.raw_string);
+                current_key_value.key = unescape(unquote(it.raw_string));
                 state = .COLON;
             } else {
                 return null, .EXPECT_KEY;
@@ -429,7 +429,7 @@ parse_json :: (s: string) -> *Json_Value, Json_Result {
                 v := New(Json_Value);
                 v.type = .STRING;
                 v.raw_string = it.raw_string;
-                v.str = unquote(it.raw_string);
+                v.str = unescape(unquote(it.raw_string));
 
                 parent := peek(stack);
                 if parent.type == .OBJECT {
@@ -514,18 +514,21 @@ parse_json :: (s: string) -> *Json_Value, Json_Result {
     return root, .OK;
 }
 
-free_json :: (json: *Json_Value) {
+json_free :: (json: *Json_Value) {
     if json.type == {
     case .ARRAY;
         for json.array {
-            free_json(it);
+            json_free(it);
         }
         array_free(json.array);
     case .OBJECT;
         for json.object.contents {
-            free_json(it.value);
+            free(it.key);
+            json_free(it.value);
         }
         array_free(json.object.contents);
+    case .STRING;
+        free(json.str);
     }
 
     free(json);
@@ -681,8 +684,7 @@ parse_non_string :: (s: string) -> *Json_Value, ok:bool {
 }
 
 unescape :: (s: string) -> string, success:bool {
-    arr: [..]u8;
-    defer array_free(arr);
+    sb: String_Builder;
 
     i := 0;
     while i < s.count {
@@ -692,48 +694,79 @@ unescape :: (s: string) -> string, success:bool {
             if i < s.count {
                 if s[i] == {
                 case #char "\\";
-                    array_add(*arr, "\\");
+                    append(*sb, #char "\\");
                 case #char "\"";
-                    array_add(*arr, "\"");
+                    append(*sb, #char "\"");
                 case #char "/";
                     // This is an optional escape in json.
-                    array_add(*arr, "/");
-                case #char "b";
-                    // Backspace, rarely use.
-                    array_add(*arr, "\b");
-                case #char "f";
-                    array_add(*arr, "\f");
+                    append(*sb, #char "/");
+                // case #char "b";
+                //     // Backspace, rarely use.
+                //     append(*sb, #char "\b");
+                // case #char "f";
+                //     append(*sb, #char "\f");
                 case #char "n";
-                    array_add(*arr, "\n");
+                    append(*sb, #char "\n");
                 case #char "r";
-                    array_add(*arr, "\r");
+                    append(*sb, #char "\r");
                 case #char "t";
-                    array_add(*arr, "\t");
+                    append(*sb, #char "\t");
                 case #char "u";
                     // Nightmare
                     // To parse this, we have to ensure the next 4 chars are hex.
                     if i + 4 >= s.count {
                         return "", false;
                     }
-                    result, success := string_to_int(slice(s, i + 1, 4), 16, u16);
+                    result, success := string_to_int(slice(s, i + 1, 4), 16, u32);
                     if !success {
                         return "", false;
                     }
 
-                // TODO: WIP
+                    stack_data: [4]u8;
+                    stack_string := cast(string)stack_data;
+                    character_utf32_to_utf8(result, *stack_string);
+                    append(*sb, stack_string);
                 }
             }
         } else {
-            array_add(*arr, c);
+            append(*sb, c);
         }
 
         i += 1;
     }
 
-    str := cast(string)(array_copy(arr));
+    str := builder_to_string(*sb);
 
     return str, true;
 }
 
+// We don't escape slash.
+escape :: (s: string) -> string {
+    sb: String_Builder;
+
+    for c: s {
+        if c == {
+        case #char "\"";
+            #through;
+        case #char "\\";
+            #through;
+        // case #char "\b";
+        //     #through;
+        // case #char "\f";
+        //     #through;
+        case #char "\n";
+            #through;
+        case #char "\r";
+            #through;
+        case #char "\t";
+            append(*sb, "\\");
+        }
+        append(*sb, c);
+    }
+
+    return builder_to_string(*sb);
+}
+
 #import "Basic";
 #import "String";
+#import "Unicode";
