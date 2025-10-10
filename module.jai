@@ -198,7 +198,140 @@ to_json :: (obj: *$T) -> *Json_Value, ok:bool {
     return j, success;
 }
 
-Parse_Result :: enum {
+from_json :: (value: *Json_Value, data: *void, ti: *Type_Info) -> Json_Result {
+    if ti.type == {
+    case .INTEGER;
+        if value.type == .NUMBER {
+            t := cast(*Type_Info_Integer)ti;
+            if t.signed {
+                if t.runtime_size == {
+                case 8;
+                    (cast(*s8)data).* = xx value.number;
+                    return .OK;
+                case 16;
+                    (cast(*s16)data).* = xx value.number;
+                    return .OK;
+                case 32;
+                    (cast(*s32)data).* = xx value.number;
+                    return .OK;
+                case 64;
+                    (cast(*s64)data).* = xx value.number;
+                    return .OK;
+                }
+            } else {
+                if t.runtime_size == {
+                case 8;
+                    (cast(*u8)data).* = xx value.number;
+                    return .OK;
+                case 16;
+                    (cast(*u16)data).* = xx value.number;
+                    return .OK;
+                case 32;
+                    (cast(*u32)data).* = xx value.number;
+                    return .OK;
+                case 64;
+                    (cast(*u64)data).* = xx value.number;
+                    return .OK;
+                }
+            }
+        } else {
+            return .ERROR_NOT_INTEGER;
+        }
+    case .FLOAT;
+        if value.type == .NUMBER {
+            if ti.runtime_size == {
+            case 32;
+                (cast(*float32)data).* = xx value.number;
+                return .OK;
+            case 64;
+                (cast(*float64)data).* = value.number;
+                return .OK;
+            }
+        } else {
+            return .ERROR_NOT_FLOAT;
+        }
+    case .BOOL;
+        if value.type == .BOOLEAN {
+            (cast(*bool)data).* = value.boolean;
+            return .OK;
+        } else {
+            return .ERROR_NOT_BOOLEAN;
+        }
+    case .STRING;
+        if value.type == .STRING {
+            // Allocating a new string.
+            (cast(*string)data).* = copy_string(value.str);
+            return .OK;
+        } else {
+            return .ERROR_NOT_STRING;
+        }
+    case .STRUCT;
+        if value.type == .OBJECT {
+            t := cast(*Type_Info_Struct)ti;
+            for t.members {
+                v := json_get(value, it.name);
+                // If the current member is not found, forget about it.
+                if v == null continue;
+
+                result := from_json(v, cast(*u8)data + it.offset_in_bytes, it.type);
+                if result != .OK return result;
+            }
+
+            return .OK;
+        } else {
+            return .ERROR_NOT_STRUCT;
+        }
+    case .ARRAY;
+        t := cast(*Type_Info_Array)ti;
+
+        if value.type == .ARRAY {
+            if #complete t.array_type == {
+            case .FIXED;
+                if t.array_count != value.array.count return .ERROR_MISMATCH_FIXED_ARRAY_SIZE;
+
+                arr := cast(*Array_View_64)data;
+
+                for 0..value.array.count - 1 {
+                    result := from_json(value.array[it], cast(*u8)arr.data + t.element_type.runtime_size * it, t.element_type);
+                    if result != .OK return result;
+                }
+
+                return .OK;
+            case .VIEW;
+                arr := cast(*Array_View_64)data;
+
+                arr.data = alloc(t.element_type.runtime_size * value.array.count);
+                arr.count = value.array.count;
+                for 0..value.array.count - 1 {
+                    result := from_json(value.array[it], cast(*u8)arr.data + t.element_type.runtime_size * it, t.element_type);
+                    if result != .OK return result;
+                }
+
+                return .OK;
+            case .RESIZABLE;
+                arr := cast(*Resizable_Array)data;
+
+                array_reserve(arr, value.array.count, t.element_type.runtime_size);
+                arr.count = value.array.count;
+                for 0..value.array.count - 1 {
+                    result := from_json(value.array[it], cast(*u8)arr.data + t.element_type.runtime_size * it, t.element_type);
+                    if result != .OK return result;
+                }
+                return .OK;
+            }
+        } else {
+            return .ERROR_NOT_ARRAY;
+        }
+    }
+
+    return .ERROR_DATATYPE_NOT_SUPPORTED;
+}
+
+from_json :: (value: *Json_Value, obj: *$T) -> Json_Result {
+    return from_json(value, obj, type_info(T));
+}
+
+Json_Result :: enum {
     OK;
     EXPECT_OBJECT_OR_ARRAY;
     EXPECT_KEY;
@@ -208,9 +341,18 @@ Parse_Result :: enum {
     ERROR_PARSING_NUMBER;
     ERROR_MISMATCH_BRACE;
     ERROR_MISMATCH_SQUARE_BRACKET;
+    ERROR_NO_MATCHING_MEMBER;
+    ERROR_NOT_INTEGER;
+    ERROR_NOT_FLOAT;
+    ERROR_NOT_BOOLEAN;
+    ERROR_NOT_STRING;
+    ERROR_NOT_STRUCT;
+    ERROR_NOT_ARRAY;
+    ERROR_DATATYPE_NOT_SUPPORTED;
+    ERROR_MISMATCH_FIXED_ARRAY_SIZE;
 }
 
-parse_json :: (s: string) -> *Json_Value, Parse_Result {
+parse_json :: (s: string) -> *Json_Value, Json_Result {
     tokens := tokenize(s);
 
     root := New(Json_Value);
