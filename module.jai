@@ -94,47 +94,6 @@ json_get :: (value: *Json_Value, key: string) -> *Json_Value {
     return null;
 }
 
-// This is stupid, I think there must be a built-in way to do this kind of thing.
-get_float :: (data: *void, ti: *Type_Info) -> float64 {
-    val: float64;
-    if ti.type == {
-    case .INTEGER;
-        t := cast(*Type_Info_Integer)ti;
-        if t.signed {
-            if ti.runtime_size == {
-            case 8;
-                val = xx (cast(*s8)data).*;
-            case 16;
-                val = xx (cast(*s16)data).*;
-            case 32;
-                val = xx (cast(*s32)data).*;
-            case 64;
-                val = xx (cast(*s64)data).*;
-            }
-        } else {
-            if ti.runtime_size == {
-            case 8;
-                val = xx (cast(*u8)data).*;
-            case 16;
-                val = xx (cast(*u16)data).*;
-            case 32;
-                val = xx (cast(*u32)data).*;
-            case 64;
-                val = xx (cast(*u64)data).*;
-            }
-        }
-    case .FLOAT;
-        if ti.runtime_size == {
-        case 32;
-            val = xx (cast(*float32)data).*;
-        case 64;
-            val = (cast(*float64)data).*;
-        }
-    }
-
-    return val;
-}
-
 // From Jai data type to json, only bool, int, float, string, struct and array
 // are supported.
 to_json :: (data: *void, ti: *Type_Info) -> *Json_Value, ok:bool {
@@ -142,11 +101,40 @@ to_json :: (data: *void, ti: *Type_Info) -> *Json_Value, ok:bool {
 
     if ti.type == {
     case .INTEGER;
-        #through;
+        root.type = .NUMBER;
+        t := cast(*Type_Info_Integer)ti;
+        if t.signed {
+            if ti.runtime_size == {
+            case 1;
+                root.number = xx (cast(*s8)data).*;
+            case 2;
+                root.number = xx (cast(*s16)data).*;
+            case 4;
+                root.number = xx (cast(*s32)data).*;
+            case 8;
+                root.number = xx (cast(*s64)data).*;
+            }
+        } else {
+            if ti.runtime_size == {
+            case 1;
+                root.number = xx (cast(*u8)data).*;
+            case 2;
+                root.number = xx (cast(*u16)data).*;
+            case 4;
+                root.number = xx (cast(*u32)data).*;
+            case 8;
+                root.number = xx (cast(*u64)data).*;
+            }
+        }
     case .FLOAT;
         root.type = .NUMBER;
-        // Really? So ugly.
-        root.number = get_float(data, ti);
+        t := cast(*Type_Info_Float)ti;
+        if t.runtime_size == {
+        case 4;
+            root.number = xx (cast(*float32)data).*;
+        case 8;
+            root.number = (cast(*float64)data).*;
+        }
     case .BOOL;
         root.type = .BOOLEAN;
         root.boolean = (cast(*bool)data).*;
@@ -205,31 +193,31 @@ from_json :: (value: *Json_Value, data: *void, ti: *Type_Info) -> Json_Result {
             t := cast(*Type_Info_Integer)ti;
             if t.signed {
                 if t.runtime_size == {
-                case 8;
+                case 1;
                     (cast(*s8)data).* = xx value.number;
                     return .OK;
-                case 16;
+                case 2;
                     (cast(*s16)data).* = xx value.number;
                     return .OK;
-                case 32;
+                case 4;
                     (cast(*s32)data).* = xx value.number;
                     return .OK;
-                case 64;
+                case 8;
                     (cast(*s64)data).* = xx value.number;
                     return .OK;
                 }
             } else {
                 if t.runtime_size == {
-                case 8;
+                case 1;
                     (cast(*u8)data).* = xx value.number;
                     return .OK;
-                case 16;
+                case 2;
                     (cast(*u16)data).* = xx value.number;
                     return .OK;
-                case 32;
+                case 4;
                     (cast(*u32)data).* = xx value.number;
                     return .OK;
-                case 64;
+                case 8;
                     (cast(*u64)data).* = xx value.number;
                     return .OK;
                 }
@@ -240,10 +228,10 @@ from_json :: (value: *Json_Value, data: *void, ti: *Type_Info) -> Json_Result {
     case .FLOAT;
         if value.type == .NUMBER {
             if ti.runtime_size == {
-            case 32;
+            case 4;
                 (cast(*float32)data).* = xx value.number;
                 return .OK;
-            case 64;
+            case 8;
                 (cast(*float64)data).* = value.number;
                 return .OK;
             }
