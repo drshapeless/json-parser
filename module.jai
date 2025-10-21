@@ -9,30 +9,242 @@ Json_Type :: enum u8 {
     OBJECT;
 }
 
-Json_Value :: struct {
+Json_Any :: struct {
     type: Json_Type;
-    raw_string: string;
     union {
         boolean: bool;
         number: float64;
         str: string;
-        array: [..]*Json_Value;
+        array: [..]Json_Any;
         object: Json_Object;
     }
 }
 
 Key_Value :: struct {
     key: string;
-    value: *Json_Value;
+    value: Json_Any;
 }
 
-Json_Object :: struct {
-    contents: [..]Key_Value;
+Json_Object :: [..]Key_Value;
+
+Json_Result :: enum {
+    OK;
+    EXPECT_OBJECT_OR_ARRAY;
+    EXPECT_KEY;
+    EXPECT_COLON;
+    EXPECT_VALUE;
+    EXPECT_COMMA;
+    ERROR_PARSING_NUMBER;
+    ERROR_MISMATCH_BRACE;
+    ERROR_MISMATCH_SQUARE_BRACKET;
+    ERROR_NO_MATCHING_MEMBER;
+    ERROR_NOT_INTEGER;
+    ERROR_NOT_FLOAT;
+    ERROR_NOT_BOOLEAN;
+    ERROR_NOT_STRING;
+    ERROR_NOT_STRUCT;
+    ERROR_NOT_ARRAY;
+    ERROR_DATATYPE_NOT_SUPPORTED;
+    ERROR_MISMATCH_FIXED_ARRAY_SIZE;
 }
 
-json_print :: (sb: *String_Builder, value: *Json_Value) {
-    if value == null return;
+parse_json :: (s: string) -> Json_Any, Json_Result {
+    tokens := tokenize(s);
 
+    root: Json_Any;
+
+    // In the last version, I was worry about the value pointing to a
+    // dynamic array would be altered if the array expand. However,
+    // the nature of json parsing is not going to expand a parent
+    // container, the worry was redundant.
+    stack: [..]*Json_Any;
+    defer array_free(stack);
+
+    array_add(*stack, *root);
+
+    current_key_value: Key_Value;
+
+    state: Parse_State;
+
+    for tokens {
+        if stack.count == 0 {
+            break;
+        }
+
+        if #complete state == {
+        case .UNINIT;
+            if it.type == .OPEN_BRACE {
+                root.type = .OBJECT;
+                state = .KEY;
+            } else if it.type == .OPEN_SQUARE_BRACKET {
+                root.type = .ARRAY;
+                state = .VALUE;
+            } else {
+                return .{}, .EXPECT_OBJECT_OR_ARRAY;
+            }
+        case .KEY;
+            if it.type == .QUOTED_STRING {
+                current_key_value.key = unescape(unquote(it.raw_string));
+                state = .COLON;
+            } else {
+                return .{}, .EXPECT_KEY;
+            }
+        case .COLON;
+            if it.type == .COLON {
+                state = .VALUE;
+            } else {
+                return .{}, .EXPECT_COLON;
+            }
+        case .COMMA_OR_END;
+            if it.type == {
+            case .COMMA;
+                // TODO: add trailing comma support.
+                //
+                // The way to add trailing comma support is simple,
+                // check whether the next token is a close bracket, if
+                // so, continue. But this is ugly, I don't want to
+                // prefetch a token. Maybe we should check the
+                // previous token instead. Either way they are ugly.
+
+                parent := peek(stack);
+                if parent.type == {
+                case .OBJECT;
+                    state = .KEY;
+                case .ARRAY;
+                    state = .VALUE;
+                }
+            case .CLOSE_BRACE;
+                parent := peek(stack);
+                if parent.type == .OBJECT {
+                    pop(*stack);
+
+                    // Just poping the stack is enough, because the
+                    // state is still .COMMA_OR_END when we finish a
+                    // value.
+                } else {
+                    return .{}, .ERROR_MISMATCH_BRACE;
+                }
+            case .CLOSE_SQUARE_BRACKET;
+                parent := peek(stack);
+                if parent.type == .ARRAY {
+                    pop(*stack);
+                } else {
+                    return .{}, .ERROR_MISMATCH_SQUARE_BRACKET;
+                }
+            case;
+                return .{}, .EXPECT_COMMA;
+            }
+        case .VALUE;
+            if it.type == {
+            case .QUOTED_STRING;
+                v: Json_Any;
+                v.type = .STRING;
+                v.str = unescape(unquote(it.raw_string));
+                parent := peek(stack);
+                if parent.type == {
+                case .OBJECT;
+                    current_key_value.value = v;
+                    array_add(*parent.object, current_key_value);
+                    current_key_value = .{};
+                case .ARRAY;
+                    array_add(*parent.array, v);
+                case;
+                    assert(false);
+                }
+                state = .COMMA_OR_END;
+
+            case .UNQUOTED_STRING;
+                v, ok := parse_non_string(it.raw_string);
+                if !ok {
+                    return .{}, .ERROR_PARSING_NUMBER;
+                }
+
+                parent := peek(stack);
+                if parent.type == {
+                case .OBJECT;
+                    current_key_value.value = v;
+                    array_add(*parent.object, current_key_value);
+                    current_key_value = .{};
+                case .ARRAY;
+                    array_add(*parent.array, v);
+                case;
+                    assert(false);
+                }
+                state = .COMMA_OR_END;
+
+            case .OPEN_BRACE;
+                v: Json_Any;
+                v.type = .OBJECT;
+
+                parent := peek(stack);
+                if parent.type == {
+                case .OBJECT;
+                    current_key_value.value = v;
+                    array_add(*parent.object, current_key_value);
+                    current_key_value = .{};
+
+                    pv := peek_pointer(parent.object);
+                    array_add(*stack, *pv.value);
+                case .ARRAY;
+                    array_add(*parent.array, v);
+                    pv := peek_pointer(parent.array);
+                    array_add(*stack, pv);
+                case;
+                    assert(false);
+                }
+
+                state = .KEY;
+            case .OPEN_SQUARE_BRACKET;
+                v: Json_Any;
+                v.type = .ARRAY;
+
+                parent := peek(stack);
+                if parent.type == {
+                case .OBJECT;
+                    current_key_value.value = v;
+                    array_add(*parent.object, current_key_value);
+                    current_key_value = .{};
+
+                    pv := peek_pointer(parent.object);
+                    array_add(*stack, *pv.value);
+                case .ARRAY;
+                    array_add(*parent.array, v);
+                    pv := peek_pointer(parent.array);
+                    array_add(*stack, pv);
+                case;
+                    assert(false);
+                }
+
+                state = .VALUE;
+
+            case;
+                return .{}, .EXPECT_VALUE;
+            }
+        }
+    }
+
+    return root, .OK;
+}
+
+json_free :: (json: Json_Any) {
+    if json.type == {
+    case .ARRAY;
+        for json.array {
+            json_free(it);
+        }
+        array_free(json.array);
+    case .OBJECT;
+        for json.object {
+            free(it.key);
+            json_free(it.value);
+        }
+        array_free(json.object);
+    case .STRING;
+        free(json.str);
+    }
+}
+
+json_print :: (sb: *String_Builder, value: Json_Any) {
     // This function uses recursion, I am not sure whether it is a
     // good idea.
     if #complete value.type == {
@@ -61,13 +273,13 @@ json_print :: (sb: *String_Builder, value: *Json_Value) {
         append(sb, "]");
     case .OBJECT;
         append(sb, "{");
-        for value.object.contents {
+        for value.object {
             append(sb, "\"");
             append(sb, it.key);
             append(sb, "\"");
             append(sb, ":");
             json_print(sb, it.value);
-            if it_index != value.object.contents.count - 1 {
+            if it_index != value.object.count - 1 {
                 append(sb, ",");
             }
         }
@@ -75,29 +287,29 @@ json_print :: (sb: *String_Builder, value: *Json_Value) {
     }
 }
 
-json_print :: (value: *Json_Value) {
+json_print :: (value: Json_Any) {
     sb: String_Builder;
     json_print(*sb, value);
     write_builder(*sb);
 }
 
-// Return null if nothing is matched.
-json_get :: (value: *Json_Value, key: string) -> *Json_Value {
-    if value.type != .OBJECT return null;
+// Return Json_Any object with type NULL if nothing is matched.
+json_get :: (value: Json_Any, key: string) -> Json_Any, ok:bool {
+    if value.type != .OBJECT return .{}, false;
 
-    for value.object.contents {
+    for value.object {
         if it.key == key {
-            return it.value;
+            return it.value, true;
         }
     }
 
-    return null;
+    return .{}, false;
 }
 
 // From Jai data type to json, only bool, int, float, string, struct and array
 // are supported.
-to_json :: (data: *void, ti: *Type_Info) -> *Json_Value, ok:bool {
-    root := New(Json_Value);
+to_json :: (data: *void, ti: *Type_Info) -> Json_Any, ok:bool {
+    root: Json_Any;
 
     if ti.type == {
     case .INTEGER;
@@ -144,7 +356,6 @@ to_json :: (data: *void, ti: *Type_Info) -> *Json_Value, ok:bool {
     case .STRUCT;
         t := cast(*Type_Info_Struct)ti;
         root.type = .OBJECT;
-        root.object = .{};
         for t.members {
             kv: Key_Value;
             // Assume the member name is an ascii string.
@@ -152,12 +363,11 @@ to_json :: (data: *void, ti: *Type_Info) -> *Json_Value, ok:bool {
 
             v, ok := to_json(cast(*u8)data + it.offset_in_bytes, it.type);
             if !ok {
-                free(root);
-                return null, false;
+                return .{}, false;
             }
             kv.value = v;
 
-            array_add(*root.object.contents, kv);
+            array_add(*root.object, kv);
         }
     case .ARRAY;
         t := cast(*Type_Info_Array)ti;
@@ -167,27 +377,26 @@ to_json :: (data: *void, ti: *Type_Info) -> *Json_Value, ok:bool {
         for 0..arr_view.count - 1 {
             v, ok := to_json(cast(*u8)arr_view.data + t.element_type.runtime_size * it, t.element_type);
             if !ok {
-                free(root);
-                return null, false;
+                return .{}, false;
             }
 
             array_add(*root.array, v);
         }
     case;
-        return null, false;
+        return .{}, false;
     }
 
     return root, true;
 }
 
-to_json :: (obj: *$T) -> *Json_Value, ok:bool {
+to_json :: (obj: *$T) -> Json_Any, ok:bool {
     ti := type_info(T);
 
     j, success := to_json(obj, ti);
     return j, success;
 }
 
-from_json :: (value: *Json_Value, data: *void, ti: *Type_Info) -> Json_Result {
+from_json :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
     if ti.type == {
     case .INTEGER;
         if value.type == .NUMBER {
@@ -257,9 +466,9 @@ from_json :: (value: *Json_Value, data: *void, ti: *Type_Info) -> Json_Result {
         if value.type == .OBJECT {
             t := cast(*Type_Info_Struct)ti;
             for t.members {
-                v := json_get(value, it.name);
+                v, ok := json_get(value, it.name);
                 // If the current member is not found, forget about it.
-                if v == null continue;
+                if !ok continue;
 
                 result := from_json(v, cast(*u8)data + it.offset_in_bytes, it.type);
                 if result != .OK return result;
@@ -315,224 +524,10 @@ from_json :: (value: *Json_Value, data: *void, ti: *Type_Info) -> Json_Result {
     return .ERROR_DATATYPE_NOT_SUPPORTED;
 }
 
-from_json :: (value: *Json_Value, obj: *$T) -> Json_Result {
+from_json :: (value: Json_Any, obj: *$T) -> Json_Result {
     return from_json(value, obj, type_info(T));
 }
 
-Json_Result :: enum {
-    OK;
-    EXPECT_OBJECT_OR_ARRAY;
-    EXPECT_KEY;
-    EXPECT_COLON;
-    EXPECT_VALUE;
-    EXPECT_COMMA;
-    ERROR_PARSING_NUMBER;
-    ERROR_MISMATCH_BRACE;
-    ERROR_MISMATCH_SQUARE_BRACKET;
-    ERROR_NO_MATCHING_MEMBER;
-    ERROR_NOT_INTEGER;
-    ERROR_NOT_FLOAT;
-    ERROR_NOT_BOOLEAN;
-    ERROR_NOT_STRING;
-    ERROR_NOT_STRUCT;
-    ERROR_NOT_ARRAY;
-    ERROR_DATATYPE_NOT_SUPPORTED;
-    ERROR_MISMATCH_FIXED_ARRAY_SIZE;
-}
-
-parse_json :: (s: string) -> *Json_Value, Json_Result {
-    tokens := tokenize(s);
-
-    root := New(Json_Value);
-
-    stack: [..]*Json_Value;
-    defer array_free(stack);
-
-    array_add(*stack, root);
-
-    current_key_value: Key_Value;
-
-    state: Parse_State;
-
-    for tokens {
-        if stack.count == 0 {
-            break;
-        }
-
-        if #complete state == {
-        case .UNINIT;
-            if it.type == .OPEN_BRACE {
-                root.type = .OBJECT;
-                root.raw_string = it.raw_string;
-                root.object = .{};
-                state = .KEY;
-            } else if it.type == .OPEN_SQUARE_BRACKET {
-                root.type = .ARRAY;
-                root.raw_string = it.raw_string;
-                // root.array = .{};
-                state = .VALUE;
-            } else {
-                // format error
-                return null, .EXPECT_OBJECT_OR_ARRAY;
-            }
-        case .KEY;
-            if it.type == .QUOTED_STRING {
-                current_key_value.key = unescape(unquote(it.raw_string));
-                state = .COLON;
-            } else {
-                return null, .EXPECT_KEY;
-            }
-        case .COLON;
-            if it.type == .COLON {
-                state = .VALUE;
-            } else {
-                return null, .EXPECT_COLON;
-            }
-        case .COMMA_OR_END;
-            if it.type == {
-            case .COMMA;
-                // TODO: Check if it is a trailing comma, now it does
-                // not support trailing comma.
-                parent := peek(stack);
-                if parent.type == {
-                case .OBJECT;
-                    state = .KEY;
-                case .ARRAY;
-                    state = .VALUE;
-                }
-            case .CLOSE_BRACE;
-                parent := peek(stack);
-                if parent.type == .OBJECT {
-                    parent.raw_string.count = it.raw_string.data - parent.raw_string.data + 1;
-                    pop(*stack);
-
-                    // Just poping the stack is enough, because the
-                    // state is still .COMMA_OR_END when we finish a
-                    // value.
-                } else {
-                    return null, .ERROR_MISMATCH_BRACE;
-                }
-            case .CLOSE_SQUARE_BRACKET;
-                parent := peek(stack);
-                if parent.type == .ARRAY {
-                    parent.raw_string.count = it.raw_string.data - parent.raw_string.data + 1;
-                    pop(*stack);
-                } else {
-                    return null, .ERROR_MISMATCH_SQUARE_BRACKET;
-                }
-            case;
-                return null, .EXPECT_COMMA;
-            } ;
-        case .VALUE;
-            if it.type == {
-            case .QUOTED_STRING;
-                v := New(Json_Value);
-                v.type = .STRING;
-                v.raw_string = it.raw_string;
-                v.str = unescape(unquote(it.raw_string));
-
-                parent := peek(stack);
-                if parent.type == .OBJECT {
-                    current_key_value.value = v;
-                    array_add(*parent.object.contents, current_key_value);
-                    current_key_value = .{};
-                } else if parent.type == .ARRAY {
-                    array_add(*parent.array, v);
-                } else {
-                    assert(false);
-                }
-
-                state = .COMMA_OR_END;
-
-            case .UNQUOTED_STRING;
-                v, ok := parse_non_string(it.raw_string);
-                if !ok {
-                    return null, .ERROR_PARSING_NUMBER;
-                }
-
-                parent := peek(stack);
-                if parent.type == {
-                case .OBJECT;
-                    current_key_value.value = v;
-                    array_add(*parent.object.contents, current_key_value);
-                    current_key_value = .{};
-                case .ARRAY;
-                    array_add(*parent.array, v);
-                case;
-                    assert(false);
-                }
-
-                state = .COMMA_OR_END;
-
-            case .OPEN_BRACE;
-                v := New(Json_Value);
-                v.type = .OBJECT;
-                v.raw_string = it.raw_string;
-                v.object = .{};
-
-                parent := peek(stack);
-                if parent.type == {
-                case .OBJECT;
-                    current_key_value.value = v;
-                    array_add(*parent.object.contents, current_key_value);
-                    current_key_value = .{};
-                case .ARRAY;
-                    array_add(*parent.array, v);
-                case;
-                    assert(false);
-                }
-
-                array_add(*stack, v);
-                state = .KEY;
-
-            case .OPEN_SQUARE_BRACKET;
-                v := New(Json_Value);
-                v.type = .ARRAY;
-                v.raw_string = it.raw_string;
-
-                parent := peek(stack);
-                if parent.type == {
-                case .OBJECT;
-                    current_key_value.value = v;
-                    array_add(*parent.object.contents, current_key_value);
-                    current_key_value = .{};
-                case .ARRAY;
-                    array_add(*parent.array, v);
-                case;
-                    assert(false);
-                }
-
-                array_add(*stack, v);
-                state = .VALUE;
-
-            case;
-                return null, .EXPECT_VALUE;
-            }
-        }
-    }
-
-    return root, .OK;
-}
-
-json_free :: (json: *Json_Value) {
-    if json.type == {
-    case .ARRAY;
-        for json.array {
-            json_free(it);
-        }
-        array_free(json.array);
-    case .OBJECT;
-        for json.object.contents {
-            free(it.key);
-            json_free(it.value);
-        }
-        array_free(json.object.contents);
-    case .STRING;
-        free(json.str);
-    }
-
-    free(json);
-}
 
 #scope_file
 Token_Type :: enum {
@@ -641,48 +636,6 @@ Parse_State :: enum {
     COMMA_OR_END;
 }
 
-
-
-unquote :: (s: string) -> string {
-    if s.count > 0 {
-        if s[0] == #char "\"" && s[s.count - 1] == #char "\"" {
-            return slice(s, 1, s.count - 2);
-        }
-    }
-
-    return s;
-}
-
-parse_non_string :: (s: string) -> *Json_Value, ok:bool {
-    v := New(Json_Value);
-    if s ==  {
-    case "true";
-        v.type = .BOOLEAN;
-        v.raw_string = s;
-        v.boolean = true;
-    case "false";
-        v.type = .BOOLEAN;
-        v.raw_string = s;
-        v.boolean = false;
-    case "null";
-        v.type = .NULL;
-        v.raw_string = s;
-    case;
-        // Should be number.
-        num, ok := string_to_float64(s);
-        if !ok {
-            free(v);
-            return null, false;
-        }
-
-        v.type = .NUMBER;
-        v.raw_string = s;
-        v.number = num;
-    }
-
-    return v, true;
-}
-
 unescape :: (s: string) -> string, success:bool {
     sb: String_Builder;
 
@@ -738,6 +691,40 @@ unescape :: (s: string) -> string, success:bool {
     str := builder_to_string(*sb);
 
     return str, true;
+}
+
+unquote :: (s: string) -> string {
+    if s.count > 0 {
+        if s[0] == #char "\"" && s[s.count - 1] == #char "\"" {
+            return slice(s, 1, s.count - 2);
+        }
+    }
+
+    return s;
+}
+
+parse_non_string :: (s: string) -> Json_Any, ok:bool {
+    v: Json_Any;
+    if s == {
+    case "true";
+        v.type = .BOOLEAN;
+        v.boolean = true;
+    case "false";
+        v.type = .BOOLEAN;
+        v.boolean = false;
+    case "null";
+        v.type = .NULL;
+    case;
+        // Should be number.
+        num, ok := string_to_float64(s);
+        if !ok {
+            return .{}, false;
+        }
+        v.type = .NUMBER;
+        v.number = num;
+    }
+
+    return v, true;
 }
 
 // We don't escape slash.
