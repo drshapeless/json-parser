@@ -48,7 +48,7 @@ Json_Result :: enum {
     ERROR_MISMATCH_FIXED_ARRAY_SIZE;
 }
 
-parse_json :: (s: string) -> Json_Any, Json_Result {
+parse_json :: (s: string) -> Json_Any, Json_Result, error_position:int {
     tokens := tokenize(s);
 
     root: Json_Any;
@@ -80,20 +80,20 @@ parse_json :: (s: string) -> Json_Any, Json_Result {
                 root.type = .ARRAY;
                 state = .VALUE;
             } else {
-                return .{}, .EXPECT_OBJECT_OR_ARRAY;
+                return .{}, .EXPECT_OBJECT_OR_ARRAY, it.raw_string.data - s.data;
             }
         case .KEY;
             if it.type == .QUOTED_STRING {
                 current_key_value.key = unescape(unquote(it.raw_string));
                 state = .COLON;
             } else {
-                return .{}, .EXPECT_KEY;
+                return .{}, .EXPECT_KEY, it.raw_string.data - s.data;
             }
         case .COLON;
             if it.type == .COLON {
                 state = .VALUE;
             } else {
-                return .{}, .EXPECT_COLON;
+                return .{}, .EXPECT_COLON, it.raw_string.data - s.data;
             }
         case .COMMA_OR_END;
             if it.type == {
@@ -122,17 +122,18 @@ parse_json :: (s: string) -> Json_Any, Json_Result {
                     // state is still .COMMA_OR_END when we finish a
                     // value.
                 } else {
-                    return .{}, .ERROR_MISMATCH_BRACE;
+                    return .{}, .ERROR_MISMATCH_BRACE, it.raw_string.data - s.data;
                 }
             case .CLOSE_SQUARE_BRACKET;
                 parent := peek(stack);
                 if parent.type == .ARRAY {
                     pop(*stack);
                 } else {
-                    return .{}, .ERROR_MISMATCH_SQUARE_BRACKET;
+                    return .{}, .ERROR_MISMATCH_SQUARE_BRACKET, it.raw_string.data - s.data;
                 }
             case;
-                return .{}, .EXPECT_COMMA;
+                log("% % % %", it, it_index, it.raw_string.data, s.data);
+                return .{}, .EXPECT_COMMA, it.raw_string.data - s.data;
             }
         case .VALUE;
             if it.type == {
@@ -156,7 +157,7 @@ parse_json :: (s: string) -> Json_Any, Json_Result {
             case .UNQUOTED_STRING;
                 v, ok := parse_non_string(it.raw_string);
                 if !ok {
-                    return .{}, .ERROR_PARSING_NUMBER;
+                    return .{}, .ERROR_PARSING_NUMBER, it.raw_string.data - s.data;
                 }
 
                 parent := peek(stack);
@@ -217,13 +218,24 @@ parse_json :: (s: string) -> Json_Any, Json_Result {
 
                 state = .VALUE;
 
+            case .CLOSE_SQUARE_BRACKET;
+                // In some rare case, the value is an empty array, e.g. []
+                // Just pop the current array from the stack
+                parent := peek(stack);
+                if parent.type == .ARRAY {
+                    pop(*stack);
+                    state = .COMMA_OR_END;
+                } else {
+                    return .{}, .ERROR_MISMATCH_SQUARE_BRACKET, it.raw_string.data - s.data;
+                }
+
             case;
-                return .{}, .EXPECT_VALUE;
+                return .{}, .EXPECT_VALUE, it.raw_string.data - s.data;
             }
         }
     }
 
-    return root, .OK;
+    return root, .OK, 0;
 }
 
 json_free :: (json: Json_Any) {
@@ -530,7 +542,7 @@ from_json :: (value: Json_Any, obj: *$T) -> Json_Result {
 
 
 #scope_file
-Token_Type :: enum {
+Token_Type :: enum u8 {
     OPEN_BRACE;
     CLOSE_BRACE;
     COLON;
@@ -558,6 +570,11 @@ tokenize :: (s: string) -> []Token {
         }
 
         t: Token;
+        t.raw_string = .{
+            data = s.data + i,
+            count = 1,
+        };
+
         if c == {
         case #char "{";
             t.type = .OPEN_BRACE;
@@ -573,12 +590,8 @@ tokenize :: (s: string) -> []Token {
             t.type = .COMMA;
         case #char "\"";
             // Find next double quote
-            t = .{
-                type = .QUOTED_STRING,
-                raw_string = .{
-                    data = s.data + i,
-                },
-            };
+            t.type = .QUOTED_STRING;
+
             new_i := i + 1;
             found := false;
             while !found {
@@ -588,17 +601,10 @@ tokenize :: (s: string) -> []Token {
                 }
                 new_i += 1;
             }
-            array_add(*tokens, t);
-            i = new_i;
-            continue;
+            i = new_i - 1;
         case;
             // unquoted string is here
-            t = .{
-                type = .UNQUOTED_STRING,
-                raw_string = .{
-                    data = s.data + i,
-                },
-            };
+            t.type = .UNQUOTED_STRING;
 
             // Find the next space, comma, or close brace
             new_i := i + 1;
@@ -612,15 +618,9 @@ tokenize :: (s: string) -> []Token {
                     new_i += 1;
                 }
             }
-            array_add(*tokens, t);
-            i = new_i;
-            continue;
+            i = new_i - 1;
         }
 
-        t.raw_string = .{
-            data = s.data + i,
-            count = 1,
-        };
         array_add(*tokens, t);
         i += 1;
     }
