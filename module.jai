@@ -260,9 +260,7 @@ json_free :: (json: Json_Any) {
     }
 }
 
-json_print :: (sb: *String_Builder, value: Json_Any) {
-    // This function uses recursion, I am not sure whether it is a
-    // good idea.
+json_print :: (sb: *String_Builder, value: Json_Any, indent: bool = false, indent_level: int = 0, indent_space: int = 4) {
     if #complete value.type == {
     case .NULL;
         append(sb, "null");
@@ -280,33 +278,55 @@ json_print :: (sb: *String_Builder, value: Json_Any) {
         append(sb, "\"");
     case .ARRAY;
         append(sb, "[");
+        if indent append(sb, "\n");
         for value.array {
-            json_print(sb, it);
-            if it_index != value.array.count - 1 {
-                append(sb, ",");
+            if indent {
+                repeat(sb, " ", (indent_level + 1) * indent_space);
             }
+            json_print(sb, it, indent, indent_level + 1, indent_space);
+            if it_index != value.array.count - 1 {
+                append(sb, ", ");
+            }
+            if indent {
+                append(sb, "\n");
+            }
+        }
+
+        if indent {
+            repeat(sb, " ", indent_level * indent_space);
         }
         append(sb, "]");
     case .OBJECT;
         append(sb, "{");
+        if indent append(sb, "\n");
         for value.object {
+            if indent {
+                repeat(sb, " ", (indent_level + 1) * indent_space);
+            }
             append(sb, "\"");
             append(sb, it.key);
             append(sb, "\"");
-            append(sb, ":");
-            json_print(sb, it.value);
+            append(sb, ": ");
+            json_print(sb, it.value, indent, indent_level + 1, indent_space);
             if it_index != value.object.count - 1 {
-                append(sb, ",");
+                append(sb, ", ");
             }
+            if indent {
+                append(sb, "\n");
+            }
+        }
+
+        if indent {
+            repeat(sb, " ", indent_level * indent_space);
         }
         append(sb, "}");
     }
 }
 
-json_print :: (value: Json_Any) {
+json_print :: (value: Json_Any, indent: bool = false, indent_level: int = 0, indent_space: int = 4) -> string {
     sb: String_Builder;
-    json_print(*sb, value);
-    write_builder(*sb);
+    json_print(*sb, value, indent, indent_level, indent_space);
+    return builder_to_string(*sb);
 }
 
 // Return Json_Any object with type NULL if nothing is matched.
@@ -756,6 +776,14 @@ escape :: (s: string) -> string {
     }
 
     return builder_to_string(*sb);
+}
+
+repeat :: (sb: *String_Builder, s: string, count: int) {
+    n := count;
+    while n > 0 {
+        append(sb, s);
+        n -= 1;
+    }
 }
 
 #import "Basic";
