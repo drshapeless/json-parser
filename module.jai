@@ -83,10 +83,20 @@ parse_json :: (s: string) -> Json_Any, Json_Result, error_position:int {
                 return .{}, .EXPECT_OBJECT_OR_ARRAY, it.raw_string.data - s.data;
             }
         case .KEY;
-            if it.type == .QUOTED_STRING {
+            if it.type == {
+            case .QUOTED_STRING;
                 current_key_value.key = unescape(unquote(it.raw_string));
                 state = .COLON;
-            } else {
+            case .CLOSE_BRACE;
+                // Support for empty struct, e.g. {}
+                parent := peek(stack);
+                if parent.type == .OBJECT {
+                    pop(*stack);
+                    state = .COMMA_OR_END;
+                } else {
+                    return .{}, .ERROR_MISMATCH_BRACE, it.raw_string.data - s.data;
+                }
+            case;
                 return .{}, .EXPECT_KEY, it.raw_string.data - s.data;
             }
         case .COLON;
@@ -98,14 +108,9 @@ parse_json :: (s: string) -> Json_Any, Json_Result, error_position:int {
         case .COMMA_OR_END;
             if it.type == {
             case .COMMA;
-                // TODO: add trailing comma support.
-                //
-                // The way to add trailing comma support is simple,
-                // check whether the next token is a close bracket, if
-                // so, continue. But this is ugly, I don't want to
-                // prefetch a token. Maybe we should check the
-                // previous token instead. Either way they are ugly.
-
+                // Something to notice is that, by supporting empty
+                // array and emtpy struct, in the key session, we now
+                // in theory support trailing comma.
                 parent := peek(stack);
                 if parent.type == {
                 case .OBJECT;
@@ -228,7 +233,6 @@ parse_json :: (s: string) -> Json_Any, Json_Result, error_position:int {
                 } else {
                     return .{}, .ERROR_MISMATCH_SQUARE_BRACKET, it.raw_string.data - s.data;
                 }
-
             case;
                 return .{}, .EXPECT_VALUE, it.raw_string.data - s.data;
             }
