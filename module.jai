@@ -342,8 +342,9 @@ json_get :: (value: Json_Any, key: string) -> Json_Any, ok:bool {
     return .{}, false;
 }
 
-// From Jai data type to json, only bool, int, float, string, struct and array
-// are supported.
+// From Jai data type to json, only bool, int, float, string, struct
+// and array are supported. Additionally, supports Anyx type for
+// better binding generation.
 to_json :: (data: *void, ti: *Type_Info) -> Json_Any, ok:bool {
     root: Json_Any;
 
@@ -390,21 +391,32 @@ to_json :: (data: *void, ti: *Type_Info) -> Json_Any, ok:bool {
         root.type = .STRING;
         root.str = escape((cast(*string)data).*);
     case .STRUCT;
-        t := cast(*Type_Info_Struct)ti;
-        root.type = .OBJECT;
-        for t.members {
-            kv: Key_Value;
-            // Assume the member name is an ascii string.
-            kv.key = copy_string(it.name);
-
-            v, ok := to_json(cast(*u8)data + it.offset_in_bytes, it.type);
-            if !ok {
-                return .{}, false;
+        if ti == type_info(Anyx) {
+            a := cast(*Anyx)data;
+            if a.optional && !a.has_value {
+                root.type = .NULL;
+            } else {
+                v, ok := to_json(a.data.value_pointer, a.data.type);
+                return v, ok;
             }
-            kv.value = v;
+        } else {
+            t := cast(*Type_Info_Struct)ti;
+            root.type = .OBJECT;
+            for t.members {
+                kv: Key_Value;
+                // Assume the member name is an ascii string.
+                kv.key = copy_string(it.name);
 
-            array_add(*root.object, kv);
+                v, ok := to_json(cast(*u8)data + it.offset_in_bytes, it.type);
+                if !ok {
+                    return .{}, false;
+                }
+                kv.value = v;
+
+                array_add(*root.object, kv);
+            }
         }
+
     case .ARRAY;
         t := cast(*Type_Info_Array)ti;
         root.type = .ARRAY;
@@ -499,7 +511,38 @@ from_json :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
             return .ERROR_NOT_STRING;
         }
     case .STRUCT;
-        if value.type == .OBJECT {
+        if ti == type_info(Anyx) {
+            a := cast(*Anyx)data;
+            if a.optional {
+                if value.type == .NULL {
+                    a.has_value = false;
+                    return .OK;
+                } else {
+                    a.has_value = true;
+                }
+            }
+
+            if a.accepted_types.count == 1 {
+                ti2 := type_info(a.accepted_types[0]);
+                a.data.value_pointer = alloc(ti2.runtime_size);
+                return from_json(value, a.data.value_pointer, ti2.runtime_size);
+            } else {
+                // If the accepted_types is more than one, we have
+                // almost no way to know exactly which type it really
+                // is. Return a Json_Any just for now.
+
+                a.data.value_pointer = alloc(size_of(Json_Any));
+                memcpy(a.data.value_pointer, *value, size_of(Json_Any));
+                a.data.type = type_info(Json_Any);
+
+                return .OK;
+
+                // TODO: Actually we can compare the member count and
+                // member name to find out with type it is, but it is
+                // way too tedious.
+
+            }
+        } else if value.type == .OBJECT {
             t := cast(*Type_Info_Struct)ti;
             for t.members {
                 v, ok := json_get(value, it.name);
@@ -789,3 +832,4 @@ repeat :: (sb: *String_Builder, s: string, count: int) {
 #import "Basic";
 #import "String";
 #import "Unicode";
+#import,dir "./Anyx";
