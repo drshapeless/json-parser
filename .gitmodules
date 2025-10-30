@@ -1,0 +1,3 @@
+[submodule "Anyx"]
+	path = Anyx
+	url = https://github.com/drshapeless/Anyx.git
