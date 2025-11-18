@@ -573,7 +573,43 @@ from_json :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
 
                     }
                 case .OBJECT;
-                    ;
+                    number_of_accepted_struct := 0;
+                    struct_infos: [..]*Type_Info;
+                    defer array_free(struct_infos);
+                    for a.accepted_types {
+                        if it.type == .STRUCT {
+                            number_of_accepted_struct += 1;
+                            array_add(*struct_infos, it);
+                        }
+                    }
+
+                    if number_of_accepted_struct == 0 {
+                        return .ERROR_NOT_STRUCT;
+                    } else if number_of_accepted_struct == 1 {
+                        a.value.value_pointer = alloc(struct_infos[0].runtime_size);
+                        a.value.type = struct_infos[0];
+                        return json_from(value, a.value.value_pointer, a.value.type);
+                    } else if number_of_accepted_struct > 1 {
+                        // We have to guess which one is better,
+                        // currently it only compare the member count.
+                        member_count := value.object.count;
+                        selected_info: *Type_Info;
+                        for struct_infos {
+                            ts := cast(*Type_Info_Struct)it;
+                            if ts.members.count == member_count {
+                                selected_info = it;
+                            }
+                        }
+
+                        if selected_info == null {
+                            // TODO: should be no matching struct
+                            return .ERROR_NOT_STRUCT;
+                        }
+
+                        a.value.value_pointer = alloc(selected_info.runtime_size);
+                        a.value.type = selected_info;
+                        return json_from(value, a.value.value_pointer, a.value.type);
+                    }
 
                 }
                 // If the accepted_types is more than one, we have
