@@ -44,6 +44,7 @@ Json_Result :: enum {
     ERROR_NOT_STRING;
     ERROR_NOT_STRUCT;
     ERROR_NOT_ARRAY;
+    ERROR_NOT_NUMBER;
     ERROR_DATATYPE_NOT_SUPPORTED;
     ERROR_MISMATCH_FIXED_ARRAY_SIZE;
 }
@@ -396,7 +397,7 @@ to_json :: (data: *void, ti: *Type_Info) -> Json_Any, ok:bool {
             if a.optional && !a.has_value {
                 root.type = .NULL;
             } else {
-                v, ok := to_json(a.data.value_pointer, a.data.type);
+                v, ok := to_json(a.value.value_pointer, a.value.type);
                 return v, ok;
             }
         } else {
@@ -448,54 +449,16 @@ from_json :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
     if ti.type == {
     case .INTEGER;
         if value.type == .NUMBER {
-            t := cast(*Type_Info_Integer)ti;
-            if t.signed {
-                if t.runtime_size == {
-                case 1;
-                    (cast(*s8)data).* = xx value.number;
-                    return .OK;
-                case 2;
-                    (cast(*s16)data).* = xx value.number;
-                    return .OK;
-                case 4;
-                    (cast(*s32)data).* = xx value.number;
-                    return .OK;
-                case 8;
-                    (cast(*s64)data).* = xx value.number;
-                    return .OK;
-                }
-            } else {
-                if t.runtime_size == {
-                case 1;
-                    (cast(*u8)data).* = xx value.number;
-                    return .OK;
-                case 2;
-                    (cast(*u16)data).* = xx value.number;
-                    return .OK;
-                case 4;
-                    (cast(*u32)data).* = xx value.number;
-                    return .OK;
-                case 8;
-                    (cast(*u64)data).* = xx value.number;
-                    return .OK;
-                }
-            }
-        } else {
-            return .ERROR_NOT_INTEGER;
+            success := from_json_integer(value, data, ti);
+            if success return .OK;
         }
+        return .ERROR_NOT_INTEGER;
     case .FLOAT;
         if value.type == .NUMBER {
-            if ti.runtime_size == {
-            case 4;
-                (cast(*float32)data).* = xx value.number;
-                return .OK;
-            case 8;
-                (cast(*float64)data).* = value.number;
-                return .OK;
-            }
-        } else {
-            return .ERROR_NOT_FLOAT;
+            success := from_json_float(value, data, ti);
+            if success return .OK;
         }
+        return .ERROR_NOT_FLOAT;
     case .BOOL;
         if value.type == .BOOLEAN {
             (cast(*bool)data).* = value.boolean;
@@ -523,17 +486,103 @@ from_json :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
             }
 
             if a.accepted_types.count == 1 {
-                ti2 := type_info(a.accepted_types[0]);
-                a.data.value_pointer = alloc(ti2.runtime_size);
-                return from_json(value, a.data.value_pointer, ti2.runtime_size);
+                ti2 := a.accepted_types[0];
+                a.value.value_pointer = alloc(ti2.runtime_size);
+                return from_json(value, a.value.value_pointer, ti2);
             } else {
+                if value.type == {
+                case .BOOLEAN;
+                    // Check if there is a bool in the accepted types
+                    found := false;
+                    found_type_info: *Type_Info;
+                    for a.accepted_types {
+                        if it.type == .BOOL {
+                            found = true;
+                            found_type_info = it;
+                        }
+                    }
+                    if !found {
+                        return .ERROR_NOT_BOOLEAN;
+                    }
+                    a.value.value_pointer = alloc(found_type_info.runtime_size);
+                    a.value.type = found_type_info;
+                    memcpy(a.value.value_pointer, *value.boolean, found_type_info.runtime_size);
+                    return .OK;
+                case .NUMBER;
+                    // Check if there is a number type
+                    found := false;
+                    found_type_info: *Type_Info;
+                    for a.accepted_types {
+                        if it.type == .INTEGER || it.type == .FLOAT {
+                            found = true;
+                            found_type_info = it;
+                        }
+                    }
+                    if !found {
+                        return .ERROR_NOT_NUMBER;
+                    }
+                    a.value.value_pointer = alloc(found_type_info.runtime_size);
+                    a.value.type = found_type_info;
+                    if found_type_info.type == .INTEGER {
+                        success := from_json_integer(value, a.value.value_pointer, a.value.type);
+                        if !success return .ERROR_NOT_INTEGER;
+                    } else if found_type_info.type == .FLOAT {
+                        success := from_json_float(value, a.value.value_pointer, a.value.type);
+                        if !success return .ERROR_NOT_FLOAT;
+                    }
+                    return .OK;
+                case .STRING;
+                    // Check if there is a string type
+                    found := false;
+                    found_type_info: *Type_Info;
+                    for a.accepted_types {
+                        if it.type == .STRING {
+                            found = true;
+                            found_type_info = it;
+                        }
+                    }
+                    if !found {
+                        return .ERROR_NOT_STRING;
+                    }
+                    a.value.value_pointer = alloc(size_of(string));
+                    a.value.type = found_type_info;
+                    (cast(*string)a.value.value_pointer).* = copy_string(value.str);
+                    return .OK;
+                case .ARRAY;
+                    // Dealing with array is tricky, because we have
+                    // to also consider the type of the array element.
+                    number_of_accepted_array := 0;
+                    selected_array_type_infos: [..]*Type_Info;
+                    defer array_free(selected_array_type_infos);
+                    for a.accepted_types {
+                        if it.type == .ARRAY {
+                            number_of_accepted_array += 1;
+                            array_add(*selected_array_type_infos, it);
+                        }
+                    }
+
+                    if number_of_accepted_array == 0 {
+                        return .ERROR_NOT_ARRAY;
+                    } else if number_of_accepted_array == 1 {
+                        // This is the best case
+                        a.value.value_pointer = alloc(selected_array_type_infos[0].runtime_size);
+                        a.value.type = selected_array_type_infos[0];
+                        return from_json_array(value, a.value.value_pointer, selected_array_type_infos[0]);
+                    } else if number_of_accepted_array > 1 {
+                        // We have to compare
+
+                    }
+                case .OBJECT;
+                    ;
+
+                }
                 // If the accepted_types is more than one, we have
                 // almost no way to know exactly which type it really
                 // is. Return a Json_Any just for now.
 
-                a.data.value_pointer = alloc(size_of(Json_Any));
-                memcpy(a.data.value_pointer, *value, size_of(Json_Any));
-                a.data.type = type_info(Json_Any);
+                a.value.value_pointer = alloc(size_of(Json_Any));
+                memcpy(a.value.value_pointer, *value, size_of(Json_Any));
+                a.value.type = type_info(Json_Any);
 
                 return .OK;
 
@@ -558,43 +607,8 @@ from_json :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
             return .ERROR_NOT_STRUCT;
         }
     case .ARRAY;
-        t := cast(*Type_Info_Array)ti;
-
         if value.type == .ARRAY {
-            if #complete t.array_type == {
-            case .FIXED;
-                if t.array_count != value.array.count return .ERROR_MISMATCH_FIXED_ARRAY_SIZE;
-
-                arr := cast(*Array_View_64)data;
-
-                for 0..value.array.count - 1 {
-                    result := from_json(value.array[it], cast(*u8)arr.data + t.element_type.runtime_size * it, t.element_type);
-                    if result != .OK return result;
-                }
-
-                return .OK;
-            case .VIEW;
-                arr := cast(*Array_View_64)data;
-
-                arr.data = alloc(t.element_type.runtime_size * value.array.count);
-                arr.count = value.array.count;
-                for 0..value.array.count - 1 {
-                    result := from_json(value.array[it], cast(*u8)arr.data + t.element_type.runtime_size * it, t.element_type);
-                    if result != .OK return result;
-                }
-
-                return .OK;
-            case .RESIZABLE;
-                arr := cast(*Resizable_Array)data;
-
-                array_reserve(arr, value.array.count, t.element_type.runtime_size);
-                arr.count = value.array.count;
-                for 0..value.array.count - 1 {
-                    result := from_json(value.array[it], cast(*u8)arr.data + t.element_type.runtime_size * it, t.element_type);
-                    if result != .OK return result;
-                }
-                return .OK;
-            }
+            return from_json_array(value, data, ti);
         } else {
             return .ERROR_NOT_ARRAY;
         }
@@ -826,6 +840,94 @@ repeat :: (sb: *String_Builder, s: string, count: int) {
     while n > 0 {
         append(sb, s);
         n -= 1;
+    }
+}
+
+from_json_integer :: (value: Json_Any, data: *void, ti: *Type_Info) -> success:bool {
+    t := cast(*Type_Info_Integer)ti;
+    if t.signed {
+        if t.runtime_size == {
+        case 1;
+            (cast(*s8)data).* = xx value.number;
+            return true;
+        case 2;
+            (cast(*s16)data).* = xx value.number;
+            return true;
+        case 4;
+            (cast(*s32)data).* = xx value.number;
+            return true;
+        case 8;
+            (cast(*s64)data).* = xx value.number;
+            return true;
+        }
+    } else {
+        if t.runtime_size == {
+        case 1;
+            (cast(*u8)data).* = xx value.number;
+            return true;
+        case 2;
+            (cast(*u16)data).* = xx value.number;
+            return true;
+        case 4;
+            (cast(*u32)data).* = xx value.number;
+            return true;
+        case 8;
+            (cast(*u64)data).* = xx value.number;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+from_json_float :: (value: Json_Any, data: *void, ti: *Type_Info) -> success:bool {
+    if ti.runtime_size == {
+    case 4;
+        (cast(*float32)data).* = xx value.number;
+        return true;
+    case 8;
+        (cast(*float64)data).* = value.number;
+        return true;
+    }
+
+    return false;
+}
+
+from_json_array :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
+    t := cast(*Type_Info_Array)ti;
+    if #complete t.array_type == {
+    case .FIXED;
+        if t.array_count != value.array.count return .ERROR_MISMATCH_FIXED_ARRAY_SIZE;
+
+        arr := cast(*Array_View_64)data;
+
+        for 0..value.array.count - 1 {
+            result := from_json(value.array[it], cast(*u8)arr.data + t.element_type.runtime_size * it, t.element_type);
+            if result != .OK return result;
+        }
+
+        return .OK;
+    case .VIEW;
+        arr := cast(*Array_View_64)data;
+
+        arr.data = alloc(t.element_type.runtime_size * value.array.count);
+        arr.count = value.array.count;
+        for 0..value.array.count - 1 {
+            result := from_json(value.array[it], cast(*u8)arr.data + t.element_type.runtime_size * it, t.element_type);
+            if result != .OK return result;
+        }
+
+        return .OK;
+    case .RESIZABLE;
+        arr := cast(*Resizable_Array)data;
+
+        array_reserve(arr, value.array.count, t.element_type.runtime_size);
+        arr.count = value.array.count;
+        for 0..value.array.count - 1 {
+            result := from_json(value.array[it], cast(*u8)arr.data + t.element_type.runtime_size * it, t.element_type);
+            if result != .OK return result;
+        }
+        return .OK;
     }
 }
 
