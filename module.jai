@@ -47,6 +47,8 @@ Json_Result :: enum {
     ERROR_NOT_NUMBER;
     ERROR_DATATYPE_NOT_SUPPORTED;
     ERROR_MISMATCH_FIXED_ARRAY_SIZE;
+    ERROR_NO_MATCHING_STRUCT;
+    ERROR_ARRAY_OF_ARRAY_NOT_SUPPORTED;
 }
 
 parse_json :: (s: string) -> Json_Any, Json_Result, error_position:int {
@@ -490,7 +492,7 @@ from_json :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
                 a.value.value_pointer = alloc(ti2.runtime_size);
                 return from_json(value, a.value.value_pointer, ti2);
             } else {
-                if value.type == {
+                if #complete value.type == {
                 case .BOOLEAN;
                     // Check if there is a bool in the accepted types
                     found := false;
@@ -561,16 +563,45 @@ from_json :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
                         }
                     }
 
-                    if number_of_accepted_array == 0 {
-                        return .ERROR_NOT_ARRAY;
-                    } else if number_of_accepted_array == 1 {
+                    if number_of_accepted_array == 1 {
                         // This is the best case
                         a.value.value_pointer = alloc(selected_array_type_infos[0].runtime_size);
                         a.value.type = selected_array_type_infos[0];
                         return from_json_array(value, a.value.value_pointer, selected_array_type_infos[0]);
                     } else if number_of_accepted_array > 1 {
-                        // We have to compare
-
+                        if value.array.count == 0 {
+                            // Since the array count is zero, we can't
+                            // find out what type it is.
+                            a.value.value_pointer = alloc(Array_View_64);
+                            a.value.type = type_info(Array_View_64);
+                        } else {
+                            // Investigate the first element of the
+                            // json array
+                            selected_info: *Type_Info;
+                            first_element := value.array[0];
+                            if #complete first_element.type == {
+                            case .NULL;
+                                // What the fuck? Just consider it as a *void.
+                                selected_info = type_info(*void);
+                            case .BOOLEAN;
+                                for selected_array_type_infos {
+                                    t := cast(*Type_Info_Array)ti;
+                                    if t.element_type.type == .BOOL {
+                                        selected_info = it;
+                                    }
+                                }
+                            case .NUMBER;
+                                ;
+                            case .STRING;
+                                ;
+                            case .ARRAY;
+                                return .ERROR_ARRAY_OF_ARRAY_NOT_SUPPORTED;
+                            case .OBJECT;
+                                ;
+                            }
+                        }
+                    } else {
+                        return .ERROR_NOT_ARRAY;
                     }
                 case .OBJECT;
                     number_of_accepted_struct := 0;
@@ -583,49 +614,30 @@ from_json :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
                         }
                     }
 
-                    if number_of_accepted_struct == 0 {
-                        return .ERROR_NOT_STRUCT;
-                    } else if number_of_accepted_struct == 1 {
+                    if number_of_accepted_struct == 1 {
                         a.value.value_pointer = alloc(struct_infos[0].runtime_size);
                         a.value.type = struct_infos[0];
                         return json_from(value, a.value.value_pointer, a.value.type);
                     } else if number_of_accepted_struct > 1 {
-                        // We have to guess which one is better,
-                        // currently it only compare the member count.
-                        member_count := value.object.count;
+                        json_obj_hash := hash_json_object(value);
                         selected_info: *Type_Info;
                         for struct_infos {
-                            ts := cast(*Type_Info_Struct)it;
-                            if ts.members.count == member_count {
+                            if json_obj_hash == hash_struct_info(it) {
                                 selected_info = it;
                             }
                         }
 
                         if selected_info == null {
-                            // TODO: should be no matching struct
-                            return .ERROR_NOT_STRUCT;
+                            return .ERROR_NOT_MATCHING_STRUCT;
                         }
 
                         a.value.value_pointer = alloc(selected_info.runtime_size);
                         a.value.type = selected_info;
                         return json_from(value, a.value.value_pointer, a.value.type);
+                    } else {
+                        return .ERROR_NOT_STRUCT;
                     }
-
                 }
-                // If the accepted_types is more than one, we have
-                // almost no way to know exactly which type it really
-                // is. Return a Json_Any just for now.
-
-                a.value.value_pointer = alloc(size_of(Json_Any));
-                memcpy(a.value.value_pointer, *value, size_of(Json_Any));
-                a.value.type = type_info(Json_Any);
-
-                return .OK;
-
-                // TODO: Actually we can compare the member count and
-                // member name to find out with type it is, but it is
-                // way too tedious.
-
             }
         } else if value.type == .OBJECT {
             t := cast(*Type_Info_Struct)ti;
@@ -965,6 +977,41 @@ from_json_array :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result
         }
         return .OK;
     }
+}
+
+// Here is a hash function to check which struct is the matching one.
+
+// It is done by multiplying the sum of ascii value of each character
+// and the length of string.
+hash_json_object :: (value: Json_Any) -> int {
+    ret: int;
+    for o: value.object {
+        num: int;
+        for c: o.key {
+            num += c;
+        }
+
+        num *= o.key.count;
+        ret += num;
+    }
+
+    return ret;
+}
+
+hash_struct_info :: (ti: *Type_Info) -> int {
+    t := cast(*Type_Info_Struct)ti;
+    ret: int;
+    for m: t.members {
+        num: int;
+        for c: m.name {
+            num += c;
+        }
+
+        num *= m.name.count;
+        ret += num;
+    }
+
+    return ret;
 }
 
 #import "Basic";
