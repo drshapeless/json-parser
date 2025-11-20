@@ -572,7 +572,7 @@ from_json :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
                         if value.array.count == 0 {
                             // Since the array count is zero, we can't
                             // find out what type it is.
-                            a.value.value_pointer = alloc(Array_View_64);
+                            a.value.value_pointer = alloc(size_of(Array_View_64));
                             a.value.type = type_info(Array_View_64);
                         } else {
                             // Investigate the first element of the
@@ -591,14 +591,40 @@ from_json :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
                                     }
                                 }
                             case .NUMBER;
-                                ;
+                                for selected_array_type_infos {
+                                    t := cast(*Type_Info_Array)ti;
+                                    if t.element_type.type == .FLOAT || t.element_type.type == .INTEGER {
+                                        selected_info = it;
+                                    }
+                                }
                             case .STRING;
-                                ;
+                                for selected_array_type_infos {
+                                    t := cast(*Type_Info_Array)ti;
+                                    if t.element_type.type == .STRING {
+                                        selected_info = it;
+                                    }
+                                }
                             case .ARRAY;
                                 return .ERROR_ARRAY_OF_ARRAY_NOT_SUPPORTED;
                             case .OBJECT;
-                                ;
+                                obj_hash := hash_json_object(first_element);
+                                for selected_array_type_infos {
+                                    t := cast(*Type_Info_Array)ti;
+                                    struct_hash := hash_struct_info(t);
+                                    if obj_hash == struct_hash {
+                                        selected_info = it;
+                                    }
+                                }
                             }
+
+                            if selected_info == null {
+                                return .ERROR_NO_MATCHING_STRUCT;
+                            }
+
+                            a.value.value_pointer = alloc(selected_info.runtime_size);
+                            a.value.type = selected_info;
+
+                            return from_json_array(value, a.value.value_pointer, a.value.type);
                         }
                     } else {
                         return .ERROR_NOT_ARRAY;
