@@ -492,7 +492,8 @@ from_json :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
                 a.value.value_pointer = alloc(ti2.runtime_size);
                 return from_json(value, a.value.value_pointer, ti2);
             } else {
-                if #complete value.type == {
+                // case .NULL would never happen
+                if value.type == {
                 case .BOOLEAN;
                     // Check if there is a bool in the accepted types
                     found := false;
@@ -588,6 +589,7 @@ from_json :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
                                     t := cast(*Type_Info_Array)ti;
                                     if t.element_type.type == .BOOL {
                                         selected_info = it;
+                                        break;
                                     }
                                 }
                             case .NUMBER;
@@ -595,6 +597,7 @@ from_json :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
                                     t := cast(*Type_Info_Array)ti;
                                     if t.element_type.type == .FLOAT || t.element_type.type == .INTEGER {
                                         selected_info = it;
+                                        break;
                                     }
                                 }
                             case .STRING;
@@ -602,6 +605,7 @@ from_json :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
                                     t := cast(*Type_Info_Array)ti;
                                     if t.element_type.type == .STRING {
                                         selected_info = it;
+                                        break;
                                     }
                                 }
                             case .ARRAY;
@@ -613,6 +617,7 @@ from_json :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
                                     struct_hash := hash_struct_info(t);
                                     if obj_hash == struct_hash {
                                         selected_info = it;
+                                        break;
                                     }
                                 }
                             }
@@ -643,7 +648,7 @@ from_json :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
                     if number_of_accepted_struct == 1 {
                         a.value.value_pointer = alloc(struct_infos[0].runtime_size);
                         a.value.type = struct_infos[0];
-                        return json_from(value, a.value.value_pointer, a.value.type);
+                        return from_json(value, a.value.value_pointer, a.value.type);
                     } else if number_of_accepted_struct > 1 {
                         json_obj_hash := hash_json_object(value);
                         selected_info: *Type_Info;
@@ -654,12 +659,12 @@ from_json :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
                         }
 
                         if selected_info == null {
-                            return .ERROR_NOT_MATCHING_STRUCT;
+                            return .ERROR_NO_MATCHING_STRUCT;
                         }
 
                         a.value.value_pointer = alloc(selected_info.runtime_size);
                         a.value.type = selected_info;
-                        return json_from(value, a.value.value_pointer, a.value.type);
+                        return from_json(value, a.value.value_pointer, a.value.type);
                     } else {
                         return .ERROR_NOT_STRUCT;
                     }
