@@ -53,6 +53,7 @@ Json_Result :: enum {
 
 parse_json :: (s: string) -> Json_Any, Json_Result, error_position:int {
     tokens := tokenize(s);
+    defer array_free(tokens);
 
     root: Json_Any;
 
