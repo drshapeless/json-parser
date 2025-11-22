@@ -1,6 +1,6 @@
 // This json parser does not support json with comment and trailing comma.
 
-Json_Type :: enum u8 {
+Json_Type :: enum {
     NULL;
     BOOLEAN;
     NUMBER;
@@ -702,7 +702,7 @@ from_json :: (value: Json_Any, obj: *$T) -> Json_Result {
 
 
 #scope_file
-Token_Type :: enum u8 {
+Token_Type :: enum {
     OPEN_BRACE;
     CLOSE_BRACE;
     COLON;
