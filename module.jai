@@ -720,7 +720,7 @@ Token :: struct {
 
 tokenize :: (s: string) -> []Token {
     tokens: [..]Token;
-    defer array_free(tokens);
+
     i := 0;
     while i < s.count {
         c := s[i];
