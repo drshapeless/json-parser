@@ -995,6 +995,18 @@ from_json_array :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result
 
         arr.data = alloc(t.element_type.runtime_size * value.array.count);
         arr.count = value.array.count;
+
+        // Initialize the struct, otherwise the default Anyx member
+        // does not work
+        if t.element_type.type == .STRUCT {
+            type_info_struct := cast(*Type_Info_Struct)t.element_type;
+            ini := type_info_struct.initializer;
+            if ini {
+                for 0..value.array.count - 1 {
+                    ini(cast(*u8)arr.data + t.element_type.runtime_size * it);
+                }
+            }
+        }
         for 0..value.array.count - 1 {
             result := from_json(value.array[it], cast(*u8)arr.data + t.element_type.runtime_size * it, t.element_type);
             if result != .OK return result;
@@ -1006,6 +1018,19 @@ from_json_array :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result
 
         array_reserve(arr, value.array.count, t.element_type.runtime_size);
         arr.count = value.array.count;
+
+        // Initialize the struct, otherwise the default Anyx member
+        // does not work
+        if t.element_type.type == .STRUCT {
+            type_info_struct := cast(*Type_Info_Struct)t.element_type;
+            ini := type_info_struct.initializer;
+            if ini {
+                for 0..value.array.count - 1 {
+                    ini(cast(*u8)arr.data + t.element_type.runtime_size * it);
+                }
+            }
+        }
+
         for 0..value.array.count - 1 {
             result := from_json(value.array[it], cast(*u8)arr.data + t.element_type.runtime_size * it, t.element_type);
             if result != .OK return result;
