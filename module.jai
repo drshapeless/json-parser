@@ -503,6 +503,7 @@ from_json :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
                         if it.type == .BOOL {
                             found = true;
                             found_type_info = it;
+                            break;
                         }
                     }
                     if !found {
@@ -520,6 +521,7 @@ from_json :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
                         if it.type == .INTEGER || it.type == .FLOAT {
                             found = true;
                             found_type_info = it;
+                            break;
                         }
                     }
                     if !found {
@@ -543,6 +545,7 @@ from_json :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
                         if it.type == .STRING {
                             found = true;
                             found_type_info = it;
+                            break;
                         }
                     }
                     if !found {
