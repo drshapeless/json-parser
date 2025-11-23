@@ -1,0 +1,16 @@
+[
+    {
+        "name": "drshapeless",
+        "age": 69,
+        "jobs": ["ball", "drug"],
+        "is_male": true,
+        "height": 1.8
+    },
+    {
+        "name": "cat",
+        "age": 3,
+        "jobs": ["eat", "sleep"],
+        "is_male": false,
+        "height": 0.43
+    }
+]

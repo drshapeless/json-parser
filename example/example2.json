@@ -1,0 +1,23 @@
+{
+    "flats": [
+        {
+            "desk": {
+                "color": "blue",
+                "height": 1.2,
+                "count": 2,
+                "has_drawer": true
+            },
+            "area": 320.78
+        },
+        {
+            "desk": {
+                "color": "red",
+                "height": 0.8,
+                "count": 3,
+                "has_drawer": false
+            },
+            "area": 267.33
+        }
+    ],
+    "level_count": 43
+}
