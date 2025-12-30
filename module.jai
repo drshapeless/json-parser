@@ -444,8 +444,13 @@ to_json :: (data: *void, ti: *Type_Info) -> Json_Any, ok:bool {
 to_json :: (obj: *$T) -> Json_Any, ok:bool {
     ti := type_info(T);
 
-    j, success := to_json(obj, ti);
-    return j, success;
+    if ti.type == .ANY {
+        j, success := to_json(obj.value_pointer, obj.type);
+        return j, success;
+    } else {
+        j, success := to_json(obj, ti);
+        return j, success;
+    }
 }
 
 from_json :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
