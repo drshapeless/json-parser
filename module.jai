@@ -358,6 +358,119 @@ json_get :: (value: Json_Any, key: string) -> Json_Any, ok:bool {
     return .{}, false;
 }
 
+to_json :: (data: *void, ti: *Type_Info) -> Json_Any, success:bool {
+    root: Json_Any;
+    success := true;
+
+    if ti.type == {
+    case .INTEGER;
+        root.type = .NUMBER;
+        t := cast(*Type_Info_Integer)ti;
+        if t.signed {
+            if ti.runtime_size == {
+            case 1;
+                root.number = xx (cast(*s8)data).*;
+            case 2;
+                root.number = xx (cast(*s16)data).*;
+            case 4;
+                root.number = xx (cast(*s32)data).*;
+            case 8;
+                root.number = xx (cast(*s64)data).*;
+            }
+        } else {
+            if ti.runtime_size == {
+            case 1;
+                root.number = xx (cast(*u8)data).*;
+            case 2;
+                root.number = xx (cast(*u16)data).*;
+            case 4;
+                root.number = xx (cast(*u32)data).*;
+            case 8;
+                root.number = xx (cast(*u64)data).*;
+            }
+        }
+    case .FLOAT;
+        root.type = .NUMBER;
+        t := cast(*Type_Info_Float)ti;
+        if t.runtime_size == {
+        case 4;
+            root.number = xx (cast(*float32)data).*;
+        case 8;
+            root.number = (cast(*float64)data).*;
+        }
+    case .BOOL;
+        root.type = .BOOLEAN;
+        root.boolean = (cast(*bool)data).*;
+    case .STRING;
+        root.type = .STRING;
+        root.str = escape((cast(*string)data).*);
+    case .ARRAY;
+        t := cast(*Type_Info_Array)ti;
+        root.type = .ARRAY;
+
+        arr_view := cast(*Array_View_64)data;
+        for 0..arr_view.count - 1 {
+            v, ok := to_json(cast(*u8)arr_view.data + t.element_type.runtime_size * it, t.element_type);
+            if !ok {
+                return .{}, false;
+            }
+
+            array_add(*root.array, v);
+        }
+    case .STRUCT;
+        if is_tagged_union(ti) {
+            // We don't care the accepted value_types of the Tagged_Union
+            tg := cast(*Empty_Tagged_Union)data;
+
+            // This is probably unsafe to cast a Type into *Type_Info
+            root, success = to_json(tg.bytes.data, cast(*Type_Info)tg.tag);
+        } else {
+            t := cast(*Type_Info_Struct)ti;
+            root.type = .OBJECT;
+            for t.members {
+                kv: Key_Value;
+                kv.key = copy_string(it.name);
+
+                v, ok := to_json(cast(*u8)data + it.offset_in_bytes, it.type);
+                if !ok {
+                    return .{}, false;
+                }
+                kv.value = v;
+
+                array_add(*root.object, kv);
+            }
+        }
+
+    case .POINTER;
+        if data == null {
+            root.type = .NULL;
+        } else {
+            // Find the underlying type of the pointer
+            t := cast(*Type_Info_Pointer)ti;
+            new_ti := t.pointer_to;
+
+            // Dereference it here should be safe.
+            new_data := (cast(*u8)data).*;
+
+            root, success = to_json(new_data, new_ti);
+        }
+    }
+
+    return root, success;
+}
+
+to_json :: (value: *$T) -> Json_Any, success:bool {
+    root: Json_Any;
+    ok := false;
+    if T == Any {
+        root, ok = to_json(value.value_pointer, value.type);
+    } else {
+        root, ok = to_json(value, type_info(T));
+    }
+
+    return root, ok;
+}
+
 repeat :: (sb: *String_Builder, s: string, count: int) {
     n := count;
     while n > 0 {
@@ -366,7 +479,73 @@ repeat :: (sb: *String_Builder, s: string, count: int) {
     }
 }
 
+// We don't escape slash.
+escape :: (s: string) -> string {
+    sb: String_Builder;
+
+    for c: s {
+        if c == {
+        case #char "\"";
+            #through;
+        case #char "\\";
+            #through;
+        // case #char "\b";
+        //     #through;
+        // case #char "\f";
+        //     #through;
+        case #char "\n";
+            #through;
+        case #char "\r";
+            #through;
+        case #char "\t";
+            append(*sb, "\\");
+        }
+        append(*sb, c);
+    }
+
+    return builder_to_string(*sb);
+}
+
+hash_string :: (s: string) -> s64 {
+    num: s64;
+    for s {
+        num += it;
+    }
+
+    num *= s.count;
+    return num;
+}
+
+hash_strings :: (arr: []string) -> s64 {
+    ret: s64;
+
+    for arr {
+        num := hash_string(it);
+        ret += num;
+    }
+
+    return ret;
+}
+
+hash_type_info_struct :: (ti: *Type_Info_Struct) -> s64 {
+    ret: s64;
+    for ti.members {
+        num := hash_string(it.name);
+        ret += num;
+    }
+
+    return ret;
+}
+
+TAGGED_UNION_HASH :: #run hash_type_info_struct(type_info(Tagged_Union()));
+
+Empty_Tagged_Union :: Tagged_Union();
+
+is_tagged_union :: (ti: *Type_Info) -> bool {
+    return hash_type_info_struct(ti) == TAGGED_UNION_HASH;
+}
 
 #import "Basic";
 #import "File";
+#import "String";
 #import,file "lexer.jai";
