@@ -1,3 +1,5 @@
+#module_parameters (DEBUG := false); // Enable DEBUG for logging error
+
 Json_Type :: enum u8 {
     NULL;
     BOOLEAN;
@@ -30,6 +32,7 @@ Json_Result :: enum u32 {
     LEXER_ERROR;
     FILE_NOT_FOUND;
 
+    // parse error
     EXPECT_OBJECT_OR_ARRAY;
     EXPECT_KEY;
     EXPECT_COLON;
@@ -37,6 +40,13 @@ Json_Result :: enum u32 {
     EXPECT_VALUE;
     MISMATCH_BRACE;
     MISMATCH_BRACKET;
+
+    // serialize error
+    EXPECT_NUMBER;
+    EXPECT_BOOLEAN;
+    EXPECT_STRING;
+    EXPECT_OBJECT;
+    MISMATCH_FIXED_ARRAY_SIZE;
 }
 
 // Parse_State means the next expected thing.
@@ -418,14 +428,14 @@ to_json :: (data: *void, ti: *Type_Info) -> Json_Any, success:bool {
             array_add(*root.array, v);
         }
     case .STRUCT;
-        if is_tagged_union(ti) {
+        t := cast(*Type_Info_Struct)ti;
+        if is_tagged_union(t) {
             // We don't care the accepted value_types of the Tagged_Union
             tg := cast(*Empty_Tagged_Union)data;
 
             // This is probably unsafe to cast a Type into *Type_Info
             root, success = to_json(tg.bytes.data, cast(*Type_Info)tg.tag);
         } else {
-            t := cast(*Type_Info_Struct)ti;
             root.type = .OBJECT;
             for t.members {
                 kv: Key_Value;
@@ -449,26 +459,88 @@ to_json :: (data: *void, ti: *Type_Info) -> Json_Any, success:bool {
             t := cast(*Type_Info_Pointer)ti;
             new_ti := t.pointer_to;
 
-            // Dereference it here should be safe.
-            new_data := (cast(*u8)data).*;
+            // What a mess, the nature of this function passes value
+            // by pointer, so for a real pointer, the argument
+            // accepted is pointer of pointer.
+            new_data := (cast(**void)data).*;
 
+            // By the recursive nature of this thing, all pointer
+            // would be deference to hell.
             root, success = to_json(new_data, new_ti);
         }
+    case .ANY;
+        a := cast(*Any)data;
+        root, success = to_json(a.value_pointer, a.type);
     }
 
     return root, success;
 }
 
 to_json :: (value: *$T) -> Json_Any, success:bool {
-    root: Json_Any;
-    ok := false;
-    if T == Any {
-        root, ok = to_json(value.value_pointer, value.type);
-    } else {
-        root, ok = to_json(value, type_info(T));
-    }
+    root, ok := to_json(value, type_info(T));
 
     return root, ok;
+}
+
+from_json :: (json: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
+    if ti.type == {
+    case .INTEGER;
+        if value.type == .NUMBER {
+            from_json_integer(json, data, ti);
+        } else {
+            report_json_error("Expect NUMBER, get %", value.type);
+            return .EXPECT_NUMBER;
+        }
+    case .FLOAT;
+        if value.type == .NUMBER {
+            from_json_float(json, data, ti);
+        } else {
+            report_json_error("Expect NUMBER, get %", value.type);
+            return .EXPECT_NUMBER;
+        }
+    case .BOOL;
+        if value.type == .BOOLEAN {
+            (cast(*bool)data).* = json.boolean;
+        } else {
+            report_json_error("Expect BOOLEAN, get %", value.type);
+            return .EXPECT_BOOLEAN;
+        }
+    case .STRING;
+        if value.type == .STRING {
+            (cast(*string)data).* = copy_string(json.str);
+        } else {
+            report_json_error("Expect STRING, get %", value.type);
+            return .EXPECT_STRING;
+        }
+    case .ARRAY;
+        if value.type == .ARRAY {
+            return from_json_array(json, data, ti);
+        } else {
+            report_json_error("Expect ARRAY, get %", value.type);
+            return .EXPECT_ARRAY;
+        }
+    case .STRUCT;
+        t := cast(*Type_Info_Struct)ti;
+        if is_tagged_union(t) {
+
+        } else if value.type == .OBJECT {
+            for t.members {
+                v, ok := json_get(value, it.name);
+                if !ok continue;
+
+                result := from_json(v, cast(*u8)data + it.offset_in_bytes, it.type);
+                if result != .OK return result;
+            }
+        } else {
+            return .EXPECT_OBJECT;
+        }
+    }
+
+    return .OK;
+}
+
+from_json :: (json: Json_Any, obj: *$T) -> Json_Result {
+    return from_json(value, obj, type_info(T));
 }
 
 repeat :: (sb: *String_Builder, s: string, count: int) {
@@ -537,15 +609,147 @@ hash_type_info_struct :: (ti: *Type_Info_Struct) -> s64 {
     return ret;
 }
 
-TAGGED_UNION_HASH :: #run hash_type_info_struct(type_info(Tagged_Union()));
-
 Empty_Tagged_Union :: Tagged_Union();
+TAGGED_UNION_HASH :: #run hash_type_info_struct(type_info(Empty_Tagged_Union));
 
-is_tagged_union :: (ti: *Type_Info) -> bool {
+is_tagged_union :: (ti: *Type_Info_Struct) -> bool {
     return hash_type_info_struct(ti) == TAGGED_UNION_HASH;
 }
+
+from_json_integer :: (value: Json_Any, data: *void, ti: *Type_Info) {
+    t := cast(*Type_Info_Integer)ti;
+
+    if t.signed {
+        if t.runtime_size == {
+        case 1;
+            (cast(*s8)data).* = xx value.number;
+        case 2;
+            (cast(*s16)data).* = xx value.number;
+        case 4;
+            (cast(*s32)data).* = xx value.number;
+        case 8;
+            (cast(*s64)data).* = xx value.number;
+        }
+    } else {
+        if t.runtime_size == {
+        case 1;
+            (cast(*u8)data).* = xx value.number;
+        case 2;
+            (cast(*u16)data).* = xx value.number;
+        case 4;
+            (cast(*u32)data).* = xx value.number;
+        case 8;
+            (cast(*u64)data).* = xx value.number;
+        }
+    }
+}
+
+from_json_float :: (value: Json_Any, data: *void, ti: *Type_Info) {
+    if ti.runtime_size == {
+    case 4;
+        (cast(*float32)data).* = xx value.number;
+    case 8;
+        (cast(*float64)data).* = value.number;
+    }
+}
+
+from_json_array :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
+    t := cast(*Type_Info_Array)ti;
+    if #complete t.array_type == {
+    case .FIXED;
+        if t.array_count != value.array.count return .MISMATCH_FIXED_ARRAY_SIZE;
+
+        arr := cast(*Array_View_64)data;
+
+        for 0..value.array.count - 1 {
+            result := from_json(value.array[it], cast(*u8)arr.data + t.element_type.runtime_size * it, t.element_type);
+            if result != .OK return result;
+        }
+
+    case .VIEW;
+        arr := cast(*Array_View_64)data;
+        arr.data = alloc(t.element_type.runtime_size * value.array.count);
+        arr.count = value.array.count;
+
+        if t.element_type.type == .STRUCT {
+            type_info_struct := cast(*Type_Info_Struct)t.element_type;
+            ini := type_info_struct.initializer;
+            if ini {
+                for 0..value.array.count - 1 {
+                    ini(cast(*u8)arr.data + t.element_type.runtime_size * it);
+                }
+            }
+        }
+
+        for 0..value.array.count - 1 {
+            result := from_json(value.array[it], cast(*u8)arr.data + t.element_type.runtime_size * it, t.element_type);
+            if result != .OK return result;
+        }
+
+    case .RESIZABLE;
+        arr := cast(*Resizable_Array)data;
+
+        array_reserve(arr, value.array.count, t.element_type.runtime_size);
+        arr.count = value.array.count;
+
+        if t.element_type.type == .STRUCT {
+            type_info_struct := cast(*Type_Info_Struct)t.element_type;
+            ini := type_info_struct.initializer;
+            if ini {
+                for 0..value.array.count - 1 {
+                    ini(cast(*u8)arr.data + t.element_type.runtime_size * it);
+                }
+            }
+        }
+
+        for 0..value.array.count - 1 {
+            result := from_json(value.array[it], cast(*u8)arr.data + t.element_type.runtime_size * it, t.element_type);
+            if result != .OK return result;
+        }
+    }
+
+    return .OK:
+}
+
+from_json_tagged_union :: (value: Json_Any, data: *void, ti: *Type_Info) {
+    // The following is a god damn mess.
+    tu := cast(*Empty_Tagged_Union)data;
+
+    ts := cast(*Type_Info_Struct)ti;
+
+    // This is to find value_types, where we just assume it is there
+    // at index 0.
+    tia := cast(*Type_Info_Array)(ts.specified_parameters[0].type);
+
+    count = tia.array_count;
+    stride = tia.element_type.runtime_size;
+
+    // This one liner is to avoid multiple casting from *Array_View_64
+    // The detailed cast flow should be like this.
+
+    // arr := cast(*Array_View_64)ts.constant_storage.data;
+    // start_ptr := arr.data;
+    start_ptr := (cast(*Array_View_64)ti.constant_storage.data).data;
+
+    // TODO: WIP
+
+    if value.type == {
+    case .BOOLEAN;
+
+    }
+}
+
+report_json_error :: (format: string, arguments: .. Any) {
+    if DEBUG == true {
+        log(format, arguments);
+    }
+} @PrintLike
+
+#scope_file
 
 #import "Basic";
 #import "File";
 #import "String";
 #import,file "lexer.jai";
+#import "Tagged_Union";
+#import "Memory";
