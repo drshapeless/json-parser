@@ -47,6 +47,8 @@ Json_Result :: enum u32 {
     EXPECT_STRING;
     EXPECT_OBJECT;
     MISMATCH_FIXED_ARRAY_SIZE;
+    INVALID_TAGGED_UNION;
+    INVALID_TYPE_IN_TAGGED_UNION;
 }
 
 // Parse_State means the next expected thing.
@@ -430,11 +432,29 @@ to_json :: (data: *void, ti: *Type_Info) -> Json_Any, success:bool {
     case .STRUCT;
         t := cast(*Type_Info_Struct)ti;
         if is_tagged_union(t) {
-            // We don't care the accepted value_types of the Tagged_Union
-            tg := cast(*Empty_Tagged_Union)data;
+            // Built-in tagged unions is just added in beta 0.2.023
+            //
+            // It is a hot mess. The tag can either be integer or
+            // Type. For the integer tagged union, we have no way to
+            // know what the tag means. Therefore, only union tagged
+            // with Type is supported.
+            //
+            // By definition, the tag is located at the zero offset of
+            // the struct. For safety measure, checking whether the
+            // first member is a type is a good idea.
+            //
+            // The checking does not pre-check the count, because it
+            // should be unnecessary.
+            if t.members[0].type != .TYPE {
+                report_json_error("Only tagged union tagged with Type is supported");
+                return .{}, false;
+            }
 
-            // This is probably unsafe to cast a Type into *Type_Info
-            root, success = to_json(tg.bytes.data, cast(*Type_Info)tg.tag);
+            ptr := cast(*u8)data;
+            ptr += size_of(Type);
+
+            // Casting a Type to *Type_Info is valid but unsafe.
+            root, success = to_json(ptr, (cast(**Type_Info)data).*);
         } else {
             root.type = .OBJECT;
             for t.members {
@@ -522,7 +542,7 @@ from_json :: (json: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
     case .STRUCT;
         t := cast(*Type_Info_Struct)ti;
         if is_tagged_union(t) {
-
+            return from_json_tagged_union(json, data, ti);
         } else if value.type == .OBJECT {
             for t.members {
                 v, ok := json_get(value, it.name);
@@ -609,11 +629,8 @@ hash_type_info_struct :: (ti: *Type_Info_Struct) -> s64 {
     return ret;
 }
 
-Empty_Tagged_Union :: Tagged_Union();
-TAGGED_UNION_HASH :: #run hash_type_info_struct(type_info(Empty_Tagged_Union));
-
 is_tagged_union :: (ti: *Type_Info_Struct) -> bool {
-    return hash_type_info_struct(ti) == TAGGED_UNION_HASH;
+    return (ti.textual_flags & (.UNION | .UNION_IS_TAGGED)) == (.UNION | .UNION_IS_TAGGED);
 }
 
 from_json_integer :: (value: Json_Any, data: *void, ti: *Type_Info) {
@@ -711,32 +728,150 @@ from_json_array :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result
     return .OK:
 }
 
-from_json_tagged_union :: (value: Json_Any, data: *void, ti: *Type_Info) {
-    // The following is a god damn mess.
-    tu := cast(*Empty_Tagged_Union)data;
+from_json_tagged_union :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
+    // Find the accepted types of the union, excluding the first
+    // member, all the members are valid type.
 
     ts := cast(*Type_Info_Struct)ti;
 
-    // This is to find value_types, where we just assume it is there
-    // at index 0.
-    tia := cast(*Type_Info_Array)(ts.specified_parameters[0].type);
+    accepted_type_members: [] *Type_Info_Struct_Member;
+    accepted_type_members.data =  cast(*void)(cast(*u8)ts.members.data + 8);
+    accepted_type_members.count = ts.members.count - 1;
 
-    count = tia.array_count;
-    stride = tia.element_type.runtime_size;
+    find_type_member :: (members: [] *Type_Info_Struct_Member, tag: Type_Info_Tag) -> *Type_Info_Struct_Member {
+        for members {
+            if it.type == tag {
+                return it;
+            }
+        }
 
-    // This one liner is to avoid multiple casting from *Array_View_64
-    // The detailed cast flow should be like this.
+        return null;
+    }
 
-    // arr := cast(*Array_View_64)ts.constant_storage.data;
-    // start_ptr := arr.data;
-    start_ptr := (cast(*Array_View_64)ti.constant_storage.data).data;
+    find_first_number :: (members: [] *Type_Info_Struct_Member) -> *Type_Info_Struct_Member {
+        for members {
+            if it.type == .INTEGER || it.type == .FLOAT {
+                return it;
+            }
+        }
 
-    // TODO: WIP
+        return null;
+    }
+
+    // Originally, this pointer cast should be in each switch
+    // statement, but the offset_in_bytes should always be 8, so I
+    // pull it out.
+    //
+    // ptr := cast(*u8)data + info.offset_in_bytes;
+    real_data := cast(*u8)data + 8;
 
     if value.type == {
-    case .BOOLEAN;
+    case .NULL;
+        // In some fucking rare case, e.g. lsp has a structure that
+        // may take null as a value but not optional, (which we
+        // represent it as a pointer). To handle this, we just make
+        // the type as void and call it a day.
 
+        info := find_type_member(accepted_type_members, .VOID);
+        if info == null {
+            report_json_error("Tagged union % does not have VOID type", ts.name);
+            return .INVALID_TYPE_IN_TAGGED_UNION;
+        }
+
+        ptr := cast(*Type)data;
+        ptr.* = void;
+
+    case .BOOLEAN;
+        info := find_type_member(accepted_type_members, .BOOL);
+        if info == null {
+            report_json_error("Tagged union % does not have BOOL type", ts.name);
+            return .INVALID_TYPE_IN_TAGGED_UNION;
+        }
+
+        ptr := cast(*Type)data;
+        ptr.* = bool;
+        return from_json(value, real_data, info.type);
+
+    case .NUMBER;
+        // We have no way to know which number type the json
+        // represents, just pick the first one.
+        info := find_first_number(accepted_type_members);
+        if info != null {
+            report_json_error("Tagged union % does not have NUMBER type", ts.name);
+            return .INVALID_TYPE_IN_TAGGED_UNION;
+        }
+
+        ptr := cast(*Type)data;
+        ptr.* = type_info_to_number_type(info.type);
+        return from_json(value, real_data, info.type);
+
+    case .STRING;
+        info := find_type_member(accepted_type_members, .STRING);
+        if info == null {
+            report_json_error("Tagged union % does not have STRING type", ts.name);
+            return .INVALID_TYPE_IN_TAGGED_UNION;
+        }
+
+        return from_json(value, real_data, info.type);
+
+    case .OBJECT;
+        // TODO: WIP
+        info: *Type_Info = null;
+        for accepted_type_members {
+            if it.type == .STRUCT {
+
+            }
+        }
+    case .ARRAY;
+        // TODO: WIP
+        ;
     }
+
+    return .OK;
+}
+
+type_info_to_number_type :: (ti: *Type_Info) -> Type {
+    ret: Type = void;
+
+    if ti.type == .INTEGER {
+        t := cast(*Type_Info_Integer);
+        if t.signed {
+            if t.runtime_size == {
+            case 1;
+                ret = s8;
+            case 2;
+                ret = s16;
+            case 4;
+                ret = s32;
+            case 8;
+                ret = s64;
+            }
+        } else {
+            if t.runtime_size == {
+            case 1;
+                ret = u8;
+            case 2;
+                ret = u16;
+            case 4;
+                ret = u32;
+            case 8;
+                ret = u64;
+            }
+        }
+    } else if ti.type == .FLOAT {
+        if t.runtime_size == {
+        case 4;
+            ret = float32;
+        case 8;
+            ret = float64;
+        }
+    } else {
+        assert(false, "You should not pass a non number type_info to type_info_to_number_type");
+    }
+
+    assert(ret != void, "The type is not set, wtf");
+
+    return ret;
 }
 
 report_json_error :: (format: string, arguments: .. Any) {
