@@ -1,4 +1,4 @@
-#module_parameters (DEBUG := false); // Enable DEBUG for logging error
+#module_parameters(DEBUG := false); // Enable DEBUG for logging error
 
 Json_Type :: enum u8 {
     NULL;
@@ -45,6 +45,7 @@ Json_Result :: enum u32 {
     EXPECT_NUMBER;
     EXPECT_BOOLEAN;
     EXPECT_STRING;
+    EXPECT_ARRAY;
     EXPECT_OBJECT;
     MISMATCH_FIXED_ARRAY_SIZE;
     INVALID_TAGGED_UNION;
@@ -505,47 +506,47 @@ to_json :: (value: *$T) -> Json_Any, success:bool {
 from_json :: (json: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
     if ti.type == {
     case .INTEGER;
-        if value.type == .NUMBER {
+        if json.type == .NUMBER {
             from_json_integer(json, data, ti);
         } else {
-            report_json_error("Expect NUMBER, get %", value.type);
+            report_json_error("Expect NUMBER, get %", json.type);
             return .EXPECT_NUMBER;
         }
     case .FLOAT;
-        if value.type == .NUMBER {
+        if json.type == .NUMBER {
             from_json_float(json, data, ti);
         } else {
-            report_json_error("Expect NUMBER, get %", value.type);
+            report_json_error("Expect NUMBER, get %", json.type);
             return .EXPECT_NUMBER;
         }
     case .BOOL;
-        if value.type == .BOOLEAN {
+        if json.type == .BOOLEAN {
             (cast(*bool)data).* = json.boolean;
         } else {
-            report_json_error("Expect BOOLEAN, get %", value.type);
+            report_json_error("Expect BOOLEAN, get %", json.type);
             return .EXPECT_BOOLEAN;
         }
     case .STRING;
-        if value.type == .STRING {
+        if json.type == .STRING {
             (cast(*string)data).* = copy_string(json.str);
         } else {
-            report_json_error("Expect STRING, get %", value.type);
+            report_json_error("Expect STRING, get %", json.type);
             return .EXPECT_STRING;
         }
     case .ARRAY;
-        if value.type == .ARRAY {
+        if json.type == .ARRAY {
             return from_json_array(json, data, ti);
         } else {
-            report_json_error("Expect ARRAY, get %", value.type);
+            report_json_error("Expect ARRAY, get %", json.type);
             return .EXPECT_ARRAY;
         }
     case .STRUCT;
         t := cast(*Type_Info_Struct)ti;
         if is_tagged_union(t) {
             return from_json_tagged_union(json, data, ti);
-        } else if value.type == .OBJECT {
+        } else if json.type == .OBJECT {
             for t.members {
-                v, ok := json_get(value, it.name);
+                v, ok := json_get(json, it.name);
                 if !ok continue;
 
                 result := from_json(v, cast(*u8)data + it.offset_in_bytes, it.type);
@@ -560,7 +561,7 @@ from_json :: (json: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
 }
 
 from_json :: (json: Json_Any, obj: *$T) -> Json_Result {
-    return from_json(value, obj, type_info(T));
+    return from_json(json, obj, type_info(T));
 }
 
 repeat :: (sb: *String_Builder, s: string, count: int) {
@@ -619,13 +620,23 @@ hash_strings :: (arr: []string) -> s64 {
     return ret;
 }
 
-hash_type_info_struct :: (ti: *Type_Info_Struct) -> s64 {
+hash_type_info_struct :: (ti: *Type_Info) -> s64 {
+    t := cast(*Type_Info_Struct)ti;
     ret: s64;
-    for ti.members {
+    for t.members {
         num := hash_string(it.name);
         ret += num;
     }
 
+    return ret;
+}
+
+hash_json_object :: (json: Json_Any) -> s64 {
+    ret: s64;
+    for json.object {
+        num := hash_string(it.key);
+        ret += num;
+    }
     return ret;
 }
 
@@ -676,10 +687,11 @@ from_json_array :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result
     case .FIXED;
         if t.array_count != value.array.count return .MISMATCH_FIXED_ARRAY_SIZE;
 
-        arr := cast(*Array_View_64)data;
-
+        // For a fixed array, the array count is hide in the
+        // *Type_Info, not in the Array_View_64. Never cast a fixed
+        // array into Array_View, that suck.
         for 0..value.array.count - 1 {
-            result := from_json(value.array[it], cast(*u8)arr.data + t.element_type.runtime_size * it, t.element_type);
+            result := from_json(value.array[it], cast(*u8)data + t.element_type.runtime_size * it, t.element_type);
             if result != .OK return result;
         }
 
@@ -725,33 +737,34 @@ from_json_array :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result
         }
     }
 
-    return .OK:
+    return .OK;
 }
 
-from_json_tagged_union :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
+from_json_tagged_union :: (json: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
     // Find the accepted types of the union, excluding the first
     // member, all the members are valid type.
 
     ts := cast(*Type_Info_Struct)ti;
 
-    accepted_type_members: [] *Type_Info_Struct_Member;
-    accepted_type_members.data =  cast(*void)(cast(*u8)ts.members.data + 8);
+    assert(ts.members.count > 1, "This does not look like a tagged union");
+    accepted_type_members: [] Type_Info_Struct_Member;
+    accepted_type_members.data =  cast(*void)(cast(*u8)ts.members.data + size_of(Type_Info_Struct_Member));
     accepted_type_members.count = ts.members.count - 1;
 
-    find_type_member :: (members: [] *Type_Info_Struct_Member, tag: Type_Info_Tag) -> *Type_Info_Struct_Member {
+    find_type_member :: (members: []Type_Info_Struct_Member, tag: Type_Info_Tag) -> *Type_Info {
         for members {
-            if it.type == tag {
-                return it;
+            if it.type.type == tag {
+                return it.type;
             }
         }
 
         return null;
     }
 
-    find_first_number :: (members: [] *Type_Info_Struct_Member) -> *Type_Info_Struct_Member {
+    find_first_number :: (members: []Type_Info_Struct_Member) -> *Type_Info {
         for members {
-            if it.type == .INTEGER || it.type == .FLOAT {
-                return it;
+            if it.type.type == .INTEGER || it.type.type == .FLOAT {
+                return it.type;
             }
         }
 
@@ -765,7 +778,7 @@ from_json_tagged_union :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json
     // ptr := cast(*u8)data + info.offset_in_bytes;
     real_data := cast(*u8)data + 8;
 
-    if value.type == {
+    if json.type == {
     case .NULL;
         // In some fucking rare case, e.g. lsp has a structure that
         // may take null as a value but not optional, (which we
@@ -790,20 +803,21 @@ from_json_tagged_union :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json
 
         ptr := cast(*Type)data;
         ptr.* = bool;
-        return from_json(value, real_data, info.type);
+        return from_json(json, real_data, info);
 
     case .NUMBER;
         // We have no way to know which number type the json
         // represents, just pick the first one.
         info := find_first_number(accepted_type_members);
-        if info != null {
+
+        if info == null {
             report_json_error("Tagged union % does not have NUMBER type", ts.name);
             return .INVALID_TYPE_IN_TAGGED_UNION;
         }
 
-        ptr := cast(*Type)data;
-        ptr.* = type_info_to_number_type(info.type);
-        return from_json(value, real_data, info.type);
+        ptr := cast(**Type_Info)data;
+        ptr.* = info;
+        return from_json(json, real_data, info);
 
     case .STRING;
         info := find_type_member(accepted_type_members, .STRING);
@@ -812,79 +826,219 @@ from_json_tagged_union :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json
             return .INVALID_TYPE_IN_TAGGED_UNION;
         }
 
-        return from_json(value, real_data, info.type);
+        ptr := cast(**Type_Info)data;
+        ptr.* = info;
+        return from_json(json, real_data, info);
 
     case .OBJECT;
-        // TODO: WIP
+        json_obj_hash := hash_json_object(json);
         info: *Type_Info = null;
-        for accepted_type_members {
-            if it.type == .STRUCT {
 
+        for accepted_type_members {
+            if it.type.type == .STRUCT {
+                if json_obj_hash == hash_type_info_struct(it.type) {
+                    info = it.type;
+                    break;
+                }
             }
         }
+
+        if info == null {
+            report_json_error("Tagged union % does not have matching struct for json .", ts.name, json_print(json));
+            return .INVALID_TYPE_IN_TAGGED_UNION;
+        }
+
+        // At this point, I am convinced that Type and *Type_Info are
+        // equal.
+        ptr := cast(**Type_Info)data;
+        ptr.* = info;
+
+        return from_json(json, real_data, info);
+
     case .ARRAY;
-        // TODO: WIP
-        ;
+        // Find the type of the array object in json array, we assume
+        // that all objects are of the same type, which is not always
+        // true in real json.
+
+        valid_array_types: [..] *Type_Info;
+        for accepted_type_members {
+            if it.type.type == .ARRAY {
+                array_add(*valid_array_types, it.type);
+            }
+        }
+
+        if valid_array_types.count == 0 {
+            report_json_error("There is no array in this tagged union %", ts.name);
+                return .INVALID_TYPE_IN_TAGGED_UNION;
+        }
+
+        if json.array.count == 0 {
+            // This is a fucking joke. In this case we just find the
+            // first matching array in the accepted_types and set its
+            // count to zero.
+
+            info: *Type_Info;
+            for accepted_type_members {
+                if it.type.type == .ARRAY {
+                    info = it.type;
+                    break;
+                }
+            }
+
+            ptr := cast(**Type_Info)data;
+            ptr.* = info;
+
+        } else {
+            first_object := json.array[0];
+
+            if valid_array_types.count == 1 {
+                // There is only one array type, check if they match.
+                info_arr := cast(*Type_Info_Array)valid_array_types[0].type;
+                info_element := info_arr.element_type;
+
+
+            }
+
+            info: *Type_Info;
+            if #complete first_object.type == {
+            case .NULL;
+                // In this case, I would say fuck you.
+                report_json_error("Cannot deduce the corresponding type of an array of null in %", json_print(json));
+                return .INVALID_TYPE_IN_TAGGED_UNION;
+
+            case .BOOLEAN;
+                info: *Type_Info;
+                for valid_array_types {
+                    info_arr := cast(*Type_Info_Array)it.type;
+                    info_element := info_arr.element_type;
+                    if info_element.type == .BOOL {
+                        // Yes, its parent array type info
+                        info = it;
+                        break;
+                    }
+                }
+
+                if info == null {
+                    report_json_error("Expect an array of boolean in tagged union %", ts.name);
+                    return .INVALID_TYPE_IN_TAGGED_UNION;
+                }
+
+                ptr := cast(**Type_Info)data;
+                ptr.* = info;
+
+                return from_json(json, real_data, info);
+
+            case .NUMBER;
+                info: *Type_Info;
+                for valid_array_types {
+                    info_arr := cast(*Type_Info_Array)it.type;
+                    info_element := info_arr.element_type;
+                    if info_element.type == .INTEGER || info_element.type == .FLOAT {
+                        // Yes, its parent array type info
+                        info = it;
+                        break;
+                    }
+                }
+
+                if info == null {
+                    report_json_error("Expect an array of number in tagged union %", ts.name);
+                    return .INVALID_TYPE_IN_TAGGED_UNION;
+                }
+
+                ptr := cast(**Type_Info)data;
+                ptr.* = info;
+
+                return from_json(json, real_data, info);
+
+            case .STRING;
+                info: *Type_Info;
+                for valid_array_types {
+                    info_arr := cast(*Type_Info_Array)it.type;
+                    info_element := info_arr.element_type;
+                    if info_element.type == .STRING {
+                        // Yes, its parent array type info
+                        info = it;
+                        break;
+                    }
+                }
+
+                if info == null {
+                    report_json_error("Expect an array of string in tagged union %", ts.name);
+                    return .INVALID_TYPE_IN_TAGGED_UNION;
+                }
+
+                ptr := cast(**Type_Info)data;
+                ptr.* = info;
+
+                return from_json(json, real_data, info);
+            case .ARRAY;
+                // In the case of array of array in a tagged union, I
+                // give up and pick the first array.
+
+                // TODO: Do a recursive checking here, but if your
+                // array is nested in a tagged union, that is probably
+                // a fucked up structure.
+                info: *Type_Info;
+
+                for valid_array_types {
+                    info_arr := cast(*Type_Info_Array)it.type;
+                    info_element := info_arr.element_type;
+                    if info_element.type == .ARRAY {
+                        info = it;
+                        break;
+                    }
+                }
+
+                if info == null {
+                    report_json_error("Expect an array of string in tagged union %", ts.name);
+                    return .INVALID_TYPE_IN_TAGGED_UNION;
+                }
+
+                ptr := cast(**Type_Info)data;
+                ptr.* = info;
+
+                return from_json(json, real_data, info);
+
+            case .OBJECT;
+                info: *Type_Info;
+
+                first_obj_hash := hash_json_object(first_object);
+                for valid_array_types {
+                    info_arr := cast(*Type_Info_Array)it.type;
+                    info_element := info_arr.element_type;
+                    if info_element.type == .STRUCT && first_obj_hash == hash_type_info_struct(info_element) {
+                        info = it;
+                        break;
+                    }
+                }
+
+
+                if info == null {
+                    report_json_error("No matching array of struct of % in tagged union %", json_print(json), ts.name);
+                    return .INVALID_TYPE_IN_TAGGED_UNION;
+                }
+
+                ptr := cast(**Type_Info)data;
+                ptr.* = info;
+
+                return from_json(json, real_data, info);
+            }
+        }
     }
 
     return .OK;
 }
 
-type_info_to_number_type :: (ti: *Type_Info) -> Type {
-    ret: Type = void;
-
-    if ti.type == .INTEGER {
-        t := cast(*Type_Info_Integer);
-        if t.signed {
-            if t.runtime_size == {
-            case 1;
-                ret = s8;
-            case 2;
-                ret = s16;
-            case 4;
-                ret = s32;
-            case 8;
-                ret = s64;
-            }
-        } else {
-            if t.runtime_size == {
-            case 1;
-                ret = u8;
-            case 2;
-                ret = u16;
-            case 4;
-                ret = u32;
-            case 8;
-                ret = u64;
-            }
-        }
-    } else if ti.type == .FLOAT {
-        if t.runtime_size == {
-        case 4;
-            ret = float32;
-        case 8;
-            ret = float64;
-        }
-    } else {
-        assert(false, "You should not pass a non number type_info to type_info_to_number_type");
-    }
-
-    assert(ret != void, "The type is not set, wtf");
-
-    return ret;
-}
-
 report_json_error :: (format: string, arguments: .. Any) {
-    if DEBUG == true {
+    #if DEBUG == true {
         log(format, arguments);
     }
 } @PrintLike
 
-#scope_file
+#scope_module
 
 #import "Basic";
 #import "File";
 #import "String";
 #import,file "lexer.jai";
-#import "Tagged_Union";
 #import "Memory";
