@@ -50,6 +50,7 @@ Json_Result :: enum u32 {
     MISMATCH_FIXED_ARRAY_SIZE;
     INVALID_TAGGED_UNION;
     INVALID_TYPE_IN_TAGGED_UNION;
+    INVALID_HASH_TABLE;
 }
 
 // Parse_State means the next expected thing.
@@ -456,6 +457,8 @@ to_json :: (data: *void, ti: *Type_Info) -> Json_Any, success:bool {
 
             // Casting a Type to *Type_Info is valid but unsafe.
             root, success = to_json(ptr, (cast(**Type_Info)data).*);
+        } else if is_hash_table(ti) {
+            root, success = to_json_hash_table(data, ti);
         } else {
             root.type = .OBJECT;
             for t.members {
@@ -544,6 +547,8 @@ from_json :: (json: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
         t := cast(*Type_Info_Struct)ti;
         if is_tagged_union(t) {
             return from_json_tagged_union(json, data, ti);
+        } else if is_hash_table(t) {
+            return from_json_hash_table(json, data, ti);
         } else if json.type == .OBJECT {
             for t.members {
                 v, ok := json_get(json, it.name);
@@ -648,6 +653,10 @@ hash_json_object :: (json: Json_Any) -> s64 {
 
 is_tagged_union :: (ti: *Type_Info_Struct) -> bool {
     return (ti.textual_flags & (.UNION | .UNION_IS_TAGGED)) == (.UNION | .UNION_IS_TAGGED);
+}
+
+is_hash_table :: (ti: *Type_Info) -> bool {
+    return ti.(*Type_Info_Struct).polymorph_source_struct == type_info(Table(void, void)).polymorph_source_struct;
 }
 
 from_json_integer :: (value: Json_Any, data: *void, ti: *Type_Info) {
@@ -1037,16 +1046,109 @@ from_json_tagged_union :: (json: Json_Any, data: *void, ti: *Type_Info) -> Json_
     return .OK;
 }
 
+
+// This function is reference to table_printer.jai I found in the discord server.
+to_json_hash_table :: (data: *void, ti: *Type_Info) -> Json_Any, success:bool {
+    root: Json_Any;
+    root.type = .OBJECT;
+
+    info := ti.(*Type_Info_Struct);
+
+    // This is fragile because when JBlow touch the order of the Table
+    // members, all things would fall apart.
+    key_type   := (*info.constant_storage[info.specified_parameters[0].offset_into_constant_storage]).(**Type_Info).*;
+    value_type := (*info.constant_storage[info.specified_parameters[1].offset_into_constant_storage]).(**Type_Info).*;
+    entry_type := (*info.constant_storage[info.members[4].offset_into_constant_storage]).(**Type_Info_Struct).*;
+
+    // Check if the Key_Type is a string
+    //
+    // Here we assume that the first specified_parameter is Key_Type
+    if key_type != type_info(string) {
+        report_json_error("Only Hash_Table with string as Key_Type is supported");
+        return .{}, false;
+    }
+
+    // extract the fields we care about
+    using data.(*struct {
+        count: int;
+        _: int; _: int; _: Allocator;
+        entries: []u8;
+    });
+
+    if count {
+        for 0..entries.count - 1 {
+            entry := entries.data + (entry_type.runtime_size * it);
+            hash := entry.(*u32).*;
+
+            if hash < FIRST_VALID_HASH continue;
+
+            kv: Key_Value;
+            key_ptr := entry + entry_type.members[1].offset_in_bytes;
+            value_ptr := entry + entry_type.members[2].offset_in_bytes;
+
+            kv.key = key_ptr.(*string).*;
+
+            v, ok := to_json(value_ptr, value_type);
+            if !ok return .{}, false;
+
+            array_add(*root.object, kv);
+        }
+    }
+
+    return root, true;
+}
+
+from_json_hash_table :: (json: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
+    info := ti.(*Type_Info_Struct);
+
+    // This is fragile because when JBlow touch the order of the Table
+    // members, all things would fall apart.
+    key_type   := (*info.constant_storage[info.specified_parameters[0].offset_into_constant_storage]).(**Type_Info).*;
+    value_type := (*info.constant_storage[info.specified_parameters[1].offset_into_constant_storage]).(**Type_Info).*;
+    entry_type := (*info.constant_storage[info.members[4].offset_into_constant_storage]).(**Type_Info_Struct).*;
+
+    load_factor_percent :u32 = (*info.constant_storage[info.specified_parameters[4].offset_into_constant_storage]).(*u32).*;
+
+    // Check if the Key_Type is a string
+    //
+    // Here we assume that the first specified_parameter is Key_Type
+    if key_type != type_info(string) {
+        report_json_error("Only Hash_Table with string as Key_Type is supported");
+        return .INVALID_HASH_TABLE;
+    }
+
+    Dumb_Table :: struct {
+        count: int;
+        allocated: int;
+        slots_filled: int;
+        allocator: Allocator;
+        entries: [] u8;
+    }
+
+    // This is copied from Table.
+    SIZE_MIN :: 32;
+
+    dumb := data.(*Dumb_Table);
+
+    // In order to do table add, a lot of functions need to be do in a
+    // generic way. Most of the following function is a spin off from
+    // the Hash_Table module
+
+
+    return .OK;
+}
+
 report_json_error :: (format: string, arguments: .. Any) {
     #if DEBUG == true {
         log(format, arguments);
     }
 } @PrintLike
 
-#scope_module
+#scope_file
 
 #import "Basic";
 #import "File";
 #import "String";
 #import,file "lexer.jai";
 #import "Memory";
+#import "Hash_Table";
