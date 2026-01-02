@@ -698,6 +698,7 @@ from_json_array :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result
     case .VIEW;
         arr := cast(*Array_View_64)data;
         arr.data = alloc(t.element_type.runtime_size * value.array.count);
+        memset(arr.data, 0, t.element_type.runtime_size * value.array.count);
         arr.count = value.array.count;
 
         if t.element_type.type == .STRUCT {
@@ -719,6 +720,7 @@ from_json_array :: (value: Json_Any, data: *void, ti: *Type_Info) -> Json_Result
         arr := cast(*Resizable_Array)data;
 
         array_reserve(arr, value.array.count, t.element_type.runtime_size);
+        memset(arr.data, 0, t.element_type.runtime_size * value.array.count);
         arr.count = value.array.count;
 
         if t.element_type.type == .STRUCT {
