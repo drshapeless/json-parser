@@ -1,180 +1,180 @@
 Person :: struct {
     name: string;
-    age: int;
+    age: s64;
     jobs: []string;
     is_male: bool;
-    height: float;
+    height: float32;
 }
 
-// Basic test
+// Test the primitive types
 test0 :: () {
     s := read_entire_file("example0.json");
     defer free(s);
 
-    j, r, i := parse_json(s);
-    assert(r == .OK, "% %", r, i);
-    defer json_free(j);
+    json, result := parse_json(s);
+    defer json_free(json);
+    assert(result == .OK, "%", result);
+    log("Test 0:");
+    log("%", json_print(json,, temp));
 
-    {
-        push_allocator(temp);
-        defer reset_temporary_storage();
-        log("Test0:");
-        log("json:\n%\n", json_print(j, indent = true));
+    person: Person;
 
-        p: Person;
-        r := from_json(j, *p);
-        assert(r == .OK, "%", r);
+    result = from_json(json, *person,, temp);
+    assert(result == .OK, "%", result);
+    defer reset_temporary_storage();
 
-        log("obj:\n%\n\n", p);
-    }
+    log("%", person);
+    log("\n");
 }
 
-// Base array
+// Test json array as root
 test1 :: () {
     s := read_entire_file("example1.json");
     defer free(s);
 
-    j, r, i := parse_json(s);
-    assert(r == .OK, "% %", r, i);
-    defer json_free(j);
+    json, result := parse_json(s);
+    defer json_free(json);
+    assert(result == .OK, "%", result);
 
-    {
-        push_allocator(temp);
-        defer reset_temporary_storage();
-        log("Test 1:");
-        log("json:\n%\n", json_print(j));
+    log("Test 1:");
+    log("%", json_print(json,, temp));
 
-        p: []Person;
-        r := from_json(j, *p);
-        assert(r == .OK, "%", r);
+    // We test all three types of array
+    people0: []Person;
+    result = from_json(json, *people0,, temp);
+    assert(result == .OK, "%", result);
 
-        log("obj:\n%\n\n", p);
-    }
+    log("Array View:");
+    log("%", people0);
+
+    people1: [2]Person;
+    result = from_json(json, *people1,, temp);
+    assert(result == .OK, "%", result);
+
+    log("Fixed array:");
+    log("%", people1);
+
+    people2: [..]Person;
+    result = from_json(json, *people2,, temp);
+    assert(result == .OK, "%", result);
+
+    log("Resizable array:");
+    log("%", people2);
+
+    defer reset_temporary_storage();
+
+    log("\n");
 }
 
-// Struct in struct
-Desk :: struct {
-    color: string;
-    height: float;
-    count: int;
-    has_drawer: bool;
-}
-
-House :: struct {
-    desk: Desk;
-    area: float;
-}
-
-Building :: struct {
-    flats: []House;
-    level_count: int;
-}
-
+// A complicated structure
 test2 :: () {
+    Building :: struct {
+        flats: []Flat;
+        level_count: s64;
+    }
+    Flat :: struct {
+        desk: struct {
+            color: string;
+            height: float32;
+            count: s64;
+            has_drawer: bool;
+        };
+        area: float64;
+    }
+
     s := read_entire_file("example2.json");
     defer free(s);
 
-    j, r, i := parse_json(s);
-    assert(r == .OK, "% %", r, i);
-    defer json_free(j);
+    json, result := parse_json(s);
+    defer json_free(json);
+    assert(result == .OK, "%", result);
 
-    {
-        push_allocator(temp);
-        defer reset_temporary_storage();
-        log("Test 2:");
-        log("json:\n%\n", json_print(j));
+    log("Test 2:");
+    log("%", json_print(json,, temp));
 
-        b: Building;
-        r := from_json(j, *b);
-        assert(r == .OK, "%", r);
+    building: Building;
+    result = from_json(json, *building,, temp);
+    assert(result == .OK, "%", result);
 
-        log("obj:\n%\n\n", b);
-    }
+    log("%", building);
+
+    defer reset_temporary_storage();
+
+    log("\n");
 }
 
-// Anyx
-Bar :: struct {
-    // This is ugly is not meant to be used outside of binding to
-    // other protocol or language
-    version: Anyx = .{ optional = true, accepted_types = .[type_info(float), type_info(string)]};
-}
 
+// Test tagged union
 test3 :: () {
+    Json_LSP :: struct {
+        version: Version;
+    }
+    Version :: union tag: Type {
+        a: float32;
+        b: string;
+    }
+
     s := read_entire_file("example3.json");
     defer free(s);
 
-    j, r, i := parse_json(s);
-    assert(r == .OK, "% %", r, i);
-    defer json_free(j);
+    json, result := parse_json(s);
+    defer json_free(json);
+    assert(result == .OK, "%", result);
 
-    {
-        push_allocator(temp);
-        defer reset_temporary_storage();
-        log("Test 3:");
-        log("json:\n%\n", json_print(j));
+    log("Test 3:");
+    log("%", json_print(json,, temp));
 
-        b: []Bar;
-        r := from_json(j, *b);
-        assert(r == .OK, "%", r);
+    lsps: []Json_LSP;
 
-        for b {
-            log("obj:");
-            log("%:\t%", it_index, it.version.value);
-            log("\n");
-        }
+    result = from_json(json, *lsps,, temp);
+    assert(result == .OK, "%", result);
+
+    for lsps {
+        a: Any;
+        a.type = cast(*Type_Info)it.version.tag;
+        a.value_pointer = cast(*u8)*it + 8;
+        log("% %", a.type.type, a);
     }
 
+
+    defer reset_temporary_storage();
+
+    log("\n");
 }
 
+// Test pointer (optional)
 test4 :: () {
-    // Where this would fail because a boolean is not accepted
+    Fruit :: struct {
+        name: string;
+        size: float32;
+        color: string;
+        origin: *string;
+    }
+    defer reset_temporary_storage();
+
     s := read_entire_file("example4.json");
     defer free(s);
 
-    j, r, i := parse_json(s);
-    assert(r == .OK, "% %", r, i);
-    defer json_free(j);
+    json, result := parse_json(s);
+    defer json_free(json);
+    assert(result == .OK, "%", result);
 
-    {
-        push_allocator(temp);
-        defer reset_temporary_storage();
-        log("Test 4:");
-        log("json:\n%\n", json_print(j));
+    log("Test 4:");
+    log("%", json_print(json,, temp));
 
-        b: Bar;
-        r := from_json(j, *b);
-        if r != .OK{
-            log("%", r);
-        }
+    fruits: []Fruit;
 
-        log("\n");
-    }
-}
+    result = from_json(json, *fruits,, temp);
+    assert(result == .OK, "%", result);
 
-// Test for optional null
-test5 :: () {
-    // Where this would fail because a boolean is not accepted
-    s := read_entire_file("example5.json");
-    defer free(s);
-
-    j, r, i := parse_json(s);
-    assert(r == .OK, "% %", r, i);
-    defer json_free(j);
-
-    {
-        push_allocator(temp);
-        defer reset_temporary_storage();
-        log("Test 5:");
-        log("json:\n%\n", json_print(j));
-
-        b: Bar;
-        r := from_json(j, *b);
-        if r != .OK{
-            log("%", r);
-        } else {
-            log("%", b);
+    for fruits {
+        log("%", it);
+        if it.origin != null {
+            log("%", it.origin.*);
         }
     }
+
+    log("\n");
 }
 
 main :: () {
@@ -183,10 +183,10 @@ main :: () {
     test2();
     test3();
     test4();
-    test5();
+
     report_memory_leaks();
 }
 
-#load "../module.jai";
+#import,file "../module.jai"(DEBUG = true);
 #import "Basic"()(MEMORY_DEBUGGER = true);
 #import "File";

@@ -1,3 +1,13 @@
-{
-    "version": true
-}
+[
+    {
+        "name": "apple",
+        "size": 3.3,
+        "color": "red"
+    },
+    {
+        "name": "orange",
+        "size": 4.8,
+        "color": "orange",
+        "origin": "africa"
+    }
+]
