@@ -555,6 +555,12 @@ from_json :: (json: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
         } else {
             return .EXPECT_OBJECT;
         }
+    case .POINTER;
+        t := cast(*Type_Info_Pointer)ti;
+        info_pointer_to := t.pointer_to;
+        ptr := alloc(info_pointer_to.runtime_size);
+        (cast(**void)data).* = ptr;
+        return from_json(json, ptr, info_pointer_to);
     }
 
     return .OK;
