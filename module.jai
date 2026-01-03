@@ -1,5 +1,6 @@
 #module_parameters(DEBUG := false); // Enable DEBUG for logging error
 
+#scope_export
 Json_Type :: enum u8 {
     NULL;
     BOOLEAN;
@@ -51,15 +52,6 @@ Json_Result :: enum u32 {
     INVALID_TAGGED_UNION;
     INVALID_TYPE_IN_TAGGED_UNION;
     INVALID_HASH_TABLE;
-}
-
-// Parse_State means the next expected thing.
-Parse_State :: enum u8 {
-    UNINIT;
-    KEY;
-    COLON;
-    VALUE;
-    COMMA_OR_END;
 }
 
 parse_json :: (s: string) -> Json_Any, Json_Result {
@@ -257,19 +249,6 @@ parse_json_from_file :: (file_path: string) -> Json_Any, Json_Result {
 
     j, r := parse_json(s);
     return j, r;
-}
-
-// I feel like I repeat myself too much.
-install_value :: (stack: []*Json_Any, kv: *Key_Value, v: Json_Any) {
-    parent := peek(stack);
-    if parent.type == {
-    case .OBJECT;
-        kv.value = v;
-        array_add(*parent.object, kv.*);
-        kv.* = .{};
-    case .ARRAY;
-        array_add(*parent.array, v);
-    }
 }
 
 json_free :: (json: Json_Any) {
@@ -575,6 +554,29 @@ from_json :: (json: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
 
 from_json :: (json: Json_Any, obj: *$T) -> Json_Result {
     return from_json(json, obj, type_info(T));
+}
+
+#scope_module
+// Parse_State means the next expected thing.
+Parse_State :: enum u8 {
+    UNINIT;
+    KEY;
+    COLON;
+    VALUE;
+    COMMA_OR_END;
+}
+
+// I feel like I repeat myself too much.
+install_value :: (stack: []*Json_Any, kv: *Key_Value, v: Json_Any) {
+    parent := peek(stack);
+    if parent.type == {
+    case .OBJECT;
+        kv.value = v;
+        array_add(*parent.object, kv.*);
+        kv.* = .{};
+    case .ARRAY;
+        array_add(*parent.array, v);
+    }
 }
 
 repeat :: (sb: *String_Builder, s: string, count: int) {
@@ -1057,8 +1059,6 @@ to_json_hash_table :: (data: *void, ti: *Type_Info) -> Json_Any, success:bool {
     DT :: #import,file "Dumb_Table.jai";
     ctx := DT.make_dumb_table(data, ti) ;
     // Check if the Key_Type is a string
-    //
-    // Here we assume that the first specified_parameter is Key_Type
     if ctx.key_type != type_info(string) {
         report_json_error("Only Hash_Table with string as Key_Type is supported");
         return .{}, false;
@@ -1093,8 +1093,6 @@ from_json_hash_table :: (json: Json_Any, data: *void, ti: *Type_Info) -> Json_Re
 
     ctx := DT.make_dumb_table(data, ti);
     // Check if the Key_Type is a string
-    //
-    // Here we assume that the first specified_parameter is Key_Type
     if ctx.key_type != type_info(string) {
         report_json_error("Only Hash_Table with string as Key_Type is supported");
         return .INVALID_HASH_TABLE;

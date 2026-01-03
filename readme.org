@@ -1,3 +1,41 @@
 #+title: readme
 
-This is a json parser in Jai.
+This is a json parser in Jai. Tested in beta 0.2.024
+
+* Background
+I was trying to do some lsp work for fun, and decided to write my own
+json parser.
+
+* Feature
+1. Support pointer.
+2. Support built-in Hash_Table
+3. Support built-in Tagged union (introduced in 0.2.023, not the
+   module one)
+
+* Challenge
+Hash_Table support is a nightmare to deal with. Serializing Json into
+Jai Hash_Table is very hard. I created a Dumb_Table module just for
+dealing with that. I am not sure whether the Dumb_Table thing worth
+its separate module. A lot of pointer work is needed. Currently, only
+Hash_Table with string as Key_Type is supported.
+
+* Usage
+There are a few functions you may want to use.
+
+#+begin_src jai-ts
+  json, result := parse_json(s);
+
+  // or a helper function to read directly from file
+  json, result := parse_json_from_file(file_path);
+
+  // Print the json
+  formatted_json_string := json_print(json);
+
+  apple: Fruit;
+
+  j, ok := to_json(*apple);
+
+  result = from_json(json, *apple);
+#+end_src
+
+For more, you may look into examples.
