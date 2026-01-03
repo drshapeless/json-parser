@@ -1,3 +1,7 @@
+// Dumb_Table is a hack to do table_add to a Hash_Table that only has
+// data pointer and type_info. It currently only supports string as
+// key type. Also, it does not support COUNT_COLLISIONS.
+
 Dumb_Table :: struct {
     count: int;
     allocated: int;
@@ -7,11 +11,58 @@ Dumb_Table :: struct {
 }
 
 Dumb_Table_Ctx :: struct {
-    table: *Dumb_Table;
-    entry_type: *Type_Info;
+    table:               *Dumb_Table;
+    entry_type:          *Type_Info_Struct;
+    key_type:            *Type_Info;
+    value_type:          *Type_Info;
+    given_hash_function:  #type (string) -> u32;
+    compare_function:    #type (string, string) -> bool;
     load_factor_percent: u32;
-    refill_removed: bool;
+    refill_removed:      bool;
+
     SIZE_MIN :: 32;
+}
+
+// User should check whether the key_type is string after calling make_dumb_table
+make_dumb_table :: (data: *void, ti: *Type_Info) -> Dumb_Table_Ctx {
+    // Should I check whether the ti is a table first?
+    //
+    // At the moment, the caller must make sure the data passed in is
+    // a Table.
+
+    ctx: Dumb_Table_Ctx;
+
+    info := ti.(*Type_Info_Struct);
+    // This is fragile because when JBlow touch the order of the Table
+    // members, all things would fall apart.
+    ctx.entry_type = (*info.constant_storage[info.members[4].offset_into_constant_storage]).(**Type_Info_Struct).*;
+    // We can also get the key_type and value_type from
+    // specified_parameters, but that requires a lot more casting and
+    // looks ugly.
+    ctx.key_type = ctx.entry_type.members[1].type;
+    ctx.value_type = ctx.entry_type.members[2].type;
+
+    ctx.load_factor_percent = (*info.constant_storage[info.specified_parameters[4].offset_into_constant_storage]).(*u32).*;
+    ctx.refill_removed = (*info.constant_storage[info.specified_parameters[5].offset_into_constant_storage]).(*bool).*;
+
+    // The reason we want given_hash_function instead of the member
+    // hash_function constant is because there is a bug in the
+    // compiler, (currently v0.2.024). If the given_hash_function is
+    // null, the real hash_function is not present in the constant
+    // storage in the type_info.
+    //
+    // If we get null given_hash_function, we would need to call
+    // Hash.get_hash() on our own.
+    //
+    // TODO: Once the bug if fixed, we would try to get the member
+    // hash_function instead.
+    ctx.given_hash_function = (*info.constant_storage[info.specified_parameters[2].offset_into_constant_storage]).(*void);
+
+    ctx.compare_function = (*info.constant_storage[info.members[7].offset_into_constant_storage]).(*void);
+
+    ctx.table = cast(*Dumb_Table)data;
+
+    return ctx;
 }
 
 table_add :: (using ctx: Dumb_Table_Ctx, key: *void, value: *void) -> *void {
@@ -28,7 +79,13 @@ table_add :: (using ctx: Dumb_Table_Ctx, key: *void, value: *void) -> *void {
 
     // Since we assume key is always string
     key_str := key.(*string).*;
-    hash := Hash.get_hash(key_str);
+    hash: u32;
+    if given_hash_function == null {
+        hash = given_hash_function(key_str);
+    } else {
+        hash = Hash.get_hash(key_str);
+    }
+
     if hash < HT.FIRST_VALID_HASH {
         hash += HT.FIRST_VALID_HASH;
     }
@@ -59,13 +116,11 @@ table_add :: (using ctx: Dumb_Table_Ctx, key: *void, value: *void) -> *void {
     entry := table.entries.data + (entry_type.runtime_size * index);
     entry.(*u32).* = hash;
 
-    key_type := entry_type.(*Type_Info_Struct).members[1];
-    memcpy(entry.(*u8) + key_type.offset_in_bytes, key, key_type.type.runtime_size);
+    memcpy(entry.(*u8) + entry_type.members[1].offset_in_bytes, key, key_type.runtime_size);
 
-    value_type := entry_type.(*Type_Info_Struct).members[2];
-    memcpy(entry.(*u8) + value_type.offset_in_bytes, value, value_type.type.runtime_size);
+    memcpy(entry.(*u8) + entry_type.members[2].offset_in_bytes, value, value_type.runtime_size);
 
-    return table.entries.data.(*u8) + value_type.offset_in_bytes;
+    return table.entries.data.(*u8) + entry_type.members[2].offset_in_bytes;
 }
 
 expand :: (using ctx: Dumb_Table_Ctx) {

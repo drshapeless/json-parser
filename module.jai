@@ -1054,45 +1054,33 @@ to_json_hash_table :: (data: *void, ti: *Type_Info) -> Json_Any, success:bool {
     root: Json_Any;
     root.type = .OBJECT;
 
-    info := ti.(*Type_Info_Struct);
-
-    // This is fragile because when JBlow touch the order of the Table
-    // members, all things would fall apart.
-    key_type   := (*info.constant_storage[info.specified_parameters[0].offset_into_constant_storage]).(**Type_Info).*;
-    value_type := (*info.constant_storage[info.specified_parameters[1].offset_into_constant_storage]).(**Type_Info).*;
-    entry_type := (*info.constant_storage[info.members[4].offset_into_constant_storage]).(**Type_Info_Struct).*;
-
+    DT :: #import,file "Dumb_Table.jai";
+    ctx := DT.make_dumb_table(data, ti) ;
     // Check if the Key_Type is a string
     //
     // Here we assume that the first specified_parameter is Key_Type
-    if key_type != type_info(string) {
+    if ctx.key_type != type_info(string) {
         report_json_error("Only Hash_Table with string as Key_Type is supported");
         return .{}, false;
     }
 
-    // extract the fields we care about
-    using data.(*struct {
-        count: int;
-        _: int; _: int; _: Allocator;
-        entries: []u8;
-    });
-
-    if count {
-        for 0..entries.count - 1 {
-            entry := entries.data + (entry_type.runtime_size * it);
+    if ctx.table.count {
+        for 0..ctx.table.entries.count - 1 {
+            entry := ctx.table.entries.data + (ctx.entry_type.runtime_size * it);
             hash := entry.(*u32).*;
 
             if hash < FIRST_VALID_HASH continue;
 
             kv: Key_Value;
-            key_ptr := entry + entry_type.members[1].offset_in_bytes;
-            value_ptr := entry + entry_type.members[2].offset_in_bytes;
+            key_ptr := entry + ctx.entry_type.members[1].offset_in_bytes;
+            value_ptr := entry + ctx.entry_type.members[2].offset_in_bytes;
 
             kv.key = key_ptr.(*string).*;
 
-            v, ok := to_json(value_ptr, value_type);
+            v, ok := to_json(value_ptr, ctx.value_type);
             if !ok return .{}, false;
 
+            kv.value = v;
             array_add(*root.object, kv);
         }
     }
@@ -1101,44 +1089,28 @@ to_json_hash_table :: (data: *void, ti: *Type_Info) -> Json_Any, success:bool {
 }
 
 from_json_hash_table :: (json: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
-    info := ti.(*Type_Info_Struct);
+    DT :: #import,file "Dumb_Table.jai";
 
-    // This is fragile because when JBlow touch the order of the Table
-    // members, all things would fall apart.
-    key_type   := (*info.constant_storage[info.specified_parameters[0].offset_into_constant_storage]).(**Type_Info).*;
-    value_type := (*info.constant_storage[info.specified_parameters[1].offset_into_constant_storage]).(**Type_Info).*;
-    entry_type := (*info.constant_storage[info.members[4].offset_into_constant_storage]).(**Type_Info_Struct).*;
-
-    load_factor_percent: u32 = (*info.constant_storage[info.specified_parameters[4].offset_into_constant_storage]).(*u32).*;
-    refill_removed: bool = (*info.constant_storage[info.specified_parameters[5].offset_into_constant_storage]).(*bool).*;
-
+    ctx := DT.make_dumb_table(data, ti);
     // Check if the Key_Type is a string
     //
     // Here we assume that the first specified_parameter is Key_Type
-    if key_type != type_info(string) {
+    if ctx.key_type != type_info(string) {
         report_json_error("Only Hash_Table with string as Key_Type is supported");
         return .INVALID_HASH_TABLE;
     }
 
-    // This is an experiment hack.
-    DT :: #import,file "Dumb_Table.jai";
-
-    ctx: DT.Dumb_Table_Ctx;
-    ctx.table = data.(*DT.Dumb_Table);
-    ctx.entry_type = entry_type;
-    ctx.load_factor_percent = load_factor_percent;
-    ctx.refill_removed = refill_removed;
-
+    pool: Pool;
     for json.object {
-        value_ptr := alloc(value_type.runtime_size);
-        memset(value_ptr, 0, value_type.runtime_size);
+        value_ptr := get(*pool, ctx.value_type.runtime_size);
+        memset(value_ptr, 0, ctx.value_type.runtime_size);
 
-        result := from_json(it.value, value_ptr, value_type);
+        result := from_json(it.value, value_ptr, ctx.value_type);
         if result != .OK return result;
 
-        log("Adding %: %", it.key, it.value);
         DT.table_add(ctx, *(it.key), value_ptr);
     }
+    release(*pool);
 
     return .OK;
 }
@@ -1157,3 +1129,4 @@ report_json_error :: (format: string, arguments: .. Any) {
 #import,file "lexer.jai";
 #import "Memory";
 #import "Hash_Table";
+#import "Pool";
