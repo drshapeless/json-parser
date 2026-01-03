@@ -177,6 +177,7 @@ test4 :: () {
     log("\n");
 }
 
+// Test hash table
 test5 :: () {
     Room :: struct {
         area: float32;
