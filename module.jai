@@ -447,7 +447,7 @@ to_json :: (data: *void, ti: *Type_Info) -> Json_Any, success:bool {
             //
             // The checking does not pre-check the count, because it
             // should be unnecessary.
-            if t.members[0].type != .TYPE {
+            if t.members[0].type.type != .TYPE {
                 report_json_error("Only tagged union tagged with Type is supported");
                 return .{}, false;
             }
@@ -547,15 +547,17 @@ from_json :: (json: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
         t := cast(*Type_Info_Struct)ti;
         if is_tagged_union(t) {
             return from_json_tagged_union(json, data, ti);
-        } else if is_hash_table(t) {
-            return from_json_hash_table(json, data, ti);
         } else if json.type == .OBJECT {
-            for t.members {
-                v, ok := json_get(json, it.name);
-                if !ok continue;
+            if is_hash_table(t) {
+                return from_json_hash_table(json, data, ti);
+            } else {
+                for t.members {
+                    v, ok := json_get(json, it.name);
+                    if !ok continue;
 
-                result := from_json(v, cast(*u8)data + it.offset_in_bytes, it.type);
-                if result != .OK return result;
+                    result := from_json(v, cast(*u8)data + it.offset_in_bytes, it.type);
+                    if result != .OK return result;
+                }
             }
         } else {
             return .EXPECT_OBJECT;
@@ -861,7 +863,7 @@ from_json_tagged_union :: (json: Json_Any, data: *void, ti: *Type_Info) -> Json_
         }
 
         if info == null {
-            report_json_error("Tagged union % does not have matching struct for json .", ts.name, json_print(json));
+            report_json_error("Tagged union % does not have matching struct for json %.", ts.name, json_print(json));
             return .INVALID_TYPE_IN_TAGGED_UNION;
         }
 
@@ -1107,7 +1109,8 @@ from_json_hash_table :: (json: Json_Any, data: *void, ti: *Type_Info) -> Json_Re
     value_type := (*info.constant_storage[info.specified_parameters[1].offset_into_constant_storage]).(**Type_Info).*;
     entry_type := (*info.constant_storage[info.members[4].offset_into_constant_storage]).(**Type_Info_Struct).*;
 
-    load_factor_percent :u32 = (*info.constant_storage[info.specified_parameters[4].offset_into_constant_storage]).(*u32).*;
+    load_factor_percent: u32 = (*info.constant_storage[info.specified_parameters[4].offset_into_constant_storage]).(*u32).*;
+    refill_removed: bool = (*info.constant_storage[info.specified_parameters[5].offset_into_constant_storage]).(*bool).*;
 
     // Check if the Key_Type is a string
     //
@@ -1117,23 +1120,25 @@ from_json_hash_table :: (json: Json_Any, data: *void, ti: *Type_Info) -> Json_Re
         return .INVALID_HASH_TABLE;
     }
 
-    Dumb_Table :: struct {
-        count: int;
-        allocated: int;
-        slots_filled: int;
-        allocator: Allocator;
-        entries: [] u8;
+    // This is an experiment hack.
+    DT :: #import,file "Dumb_Table.jai";
+
+    ctx: DT.Dumb_Table_Ctx;
+    ctx.table = data.(*DT.Dumb_Table);
+    ctx.entry_type = entry_type;
+    ctx.load_factor_percent = load_factor_percent;
+    ctx.refill_removed = refill_removed;
+
+    for json.object {
+        value_ptr := alloc(value_type.runtime_size);
+        memset(value_ptr, 0, value_type.runtime_size);
+
+        result := from_json(it.value, value_ptr, value_type);
+        if result != .OK return result;
+
+        log("Adding %: %", it.key, it.value);
+        DT.table_add(ctx, *(it.key), value_ptr);
     }
-
-    // This is copied from Table.
-    SIZE_MIN :: 32;
-
-    dumb := data.(*Dumb_Table);
-
-    // In order to do table add, a lot of functions need to be do in a
-    // generic way. Most of the following function is a spin off from
-    // the Hash_Table module
-
 
     return .OK;
 }

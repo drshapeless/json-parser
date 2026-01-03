@@ -7,7 +7,7 @@ Dumb_Table :: struct {
 }
 
 Dumb_Table_Ctx :: struct {
-    table: *Dumb_Table_Data;
+    table: *Dumb_Table;
     entry_type: *Type_Info;
     load_factor_percent: u32;
     refill_removed: bool;
@@ -15,13 +15,13 @@ Dumb_Table_Ctx :: struct {
 }
 
 table_add :: (using ctx: Dumb_Table_Ctx, key: *void, value: *void) -> *void {
-    assert(load_factor_percent < 100);
+    Basic.assert(load_factor_percent < 100);
 
     if (table.slots_filled + 1) * 100 >= table.allocated * load_factor_percent {
         expand(ctx);
     }
 
-    assert(table.slots_filled < table.allocated);
+    Basic.assert(table.slots_filled < table.allocated);
 
     // Expand Walk_Table by hand
     mask := cast,trunc(u32)(table.allocated - 1);
@@ -60,10 +60,10 @@ table_add :: (using ctx: Dumb_Table_Ctx, key: *void, value: *void) -> *void {
     entry.(*u32).* = hash;
 
     key_type := entry_type.(*Type_Info_Struct).members[1];
-    memcpy(table.entries.data.(*u8) + key_type.offset_in_bytes, key_type.runtime_size);
+    memcpy(entry.(*u8) + key_type.offset_in_bytes, key, key_type.type.runtime_size);
 
     value_type := entry_type.(*Type_Info_Struct).members[2];
-    memcpy(table.entries.data.(*u8) + value_type.offset_in_bytes, value_type.runtime_size);
+    memcpy(entry.(*u8) + value_type.offset_in_bytes, value, value_type.type.runtime_size);
 
     return table.entries.data.(*u8) + value_type.offset_in_bytes;
 }
@@ -81,7 +81,7 @@ expand :: (using ctx: Dumb_Table_Ctx) {
 
     if new_allocated < SIZE_MIN  new_allocated = SIZE_MIN;
 
-    _internal_resize_memory(table, new_allocated, entry_type);
+    _internal_resize_memory(ctx, new_allocated);
 
     table.count        = 0;
     table.slots_filled = 0;
@@ -90,9 +90,11 @@ expand :: (using ctx: Dumb_Table_Ctx) {
         entry := old_entries.data + (entry_type.runtime_size * it);
         hash := entry.(*u32).*;
 
-        ptr := cast(*u8)entry + entry_type.(*Type_Info_Struct).members[1].offset_in_bytes;
+        key_ptr := cast(*u8)entry + entry_type.(*Type_Info_Struct).members[1].offset_in_bytes;
 
-        if hash >= HT.FIRST_VALID_HASH table_add(table, ptr, entry_type);
+        value_ptr := cast(*u8)entry + entry_type.(*Type_Info_Struct).members[2].offset_in_bytes;
+
+        if hash >= HT.FIRST_VALID_HASH table_add(ctx, key_ptr, value_ptr);
     }
 
     Basic.free(old_entries.data,, table.allocator);
@@ -107,7 +109,8 @@ _internal_resize_memory :: (using ctx: Dumb_Table_Ctx, slots_to_allocate: s64 = 
 
     // Originally it calls NewArray, but we don't have the type.
     table.entries.count = n;
-    table.entries.data = Basic.alloc(n * table.entry_type.runtime_size,, table.allocator);
+    table.entries.data = Basic.alloc(n * entry_type.runtime_size,, table.allocator);
+    memset(table.entries.data, 0, n * entry_type.runtime_size);
 
     for 0..n - 1 {
         entry := table.entries.data + (entry_type.runtime_size * it);

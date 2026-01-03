@@ -177,12 +177,52 @@ test4 :: () {
     log("\n");
 }
 
+test5 :: () {
+    Room :: struct {
+        area: float32;
+        location: string;
+        furnitures: Table(string, s32);
+    }
+
+    defer reset_temporary_storage();
+
+    s := read_entire_file("example5.json");
+    defer free(s);
+
+    json, result := parse_json(s);
+    defer json_free(json);
+    assert(result == .OK, "%", result);
+
+    log("Test 5:");
+    log("%", json_print(json,, temp));
+
+    room: Room;
+
+    result = from_json(json, *room,, temp);
+    assert(result == .OK, "%", result);
+
+    for room.furnitures {
+        log("%: %", it_index, it);
+    }
+
+    j, ok := to_json(*room);
+    if !ok {
+        log("Failed deserialization");
+        return;
+    }
+
+    log("%", json_print(j));
+
+    log("\n");
+}
+
 main :: () {
     test0();
     test1();
     test2();
     test3();
     test4();
+    test5();
 
     report_memory_leaks();
 }
@@ -190,3 +230,4 @@ main :: () {
 #import,file "../module.jai"(DEBUG = true);
 #import "Basic"()(MEMORY_DEBUGGER = true);
 #import "File";
+#import "Hash_Table";
