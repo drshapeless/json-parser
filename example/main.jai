@@ -211,8 +211,9 @@ test5 :: () {
         log("Failed deserialization");
         return;
     }
+    defer json_free(j);
 
-    log("%", json_print(j));
+    log("%", json_print(j,, temp));
 
     log("\n");
 }
