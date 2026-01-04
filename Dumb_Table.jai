@@ -123,6 +123,27 @@ table_add :: (using ctx: Dumb_Table_Ctx, key: *void, value: *void) -> *void {
     return table.entries.data.(*u8) + entry_type.members[2].offset_in_bytes;
 }
 
+// for_expansion return *void as it_index and it for key and value
+// respectively, in theory, this is mutable.
+for_expansion :: (ctx: *Dumb_Table_Ctx, body: Code, flags: For_Flags) #expand {
+    #assert(!(flags & .REVERSE));
+    #assert(!(flags & .POINTER)); // This is useless as we are going to return a pointer to it_index and it.
+
+    if ctx.table.count {
+        for index: 0..ctx.table.entries.count - 1 {
+            entry := ctx.table.entries.data + (ctx.entry_type.runtime_size * index);
+            hash := entry.(*u32).*;
+
+            if hash < HT.FIRST_VALID_HASH continue;
+
+            `it_index := entry + ctx.entry_type.members[1].offset_in_bytes;
+            `it := entry + ctx.entry_type.members[2].offset_in_bytes;
+
+            #insert (remove={entry.(*u32).*=REMOVED_HASH; ctx.table.count -= 1;}) body;
+        }
+    }
+}
+
 expand :: (using ctx: Dumb_Table_Ctx) {
     old_entries := table.entries;
 
