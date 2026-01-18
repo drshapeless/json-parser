@@ -1056,33 +1056,24 @@ to_json_hash_table :: (data: *void, ti: *Type_Info) -> success:bool, Json_Any {
     root: Json_Any;
     root.type = .OBJECT;
 
-    DT :: #import,file "Dumb_Table.jai";
-    ctx := DT.make_dumb_table(data, ti) ;
+    // For expansion seems to does not work in namespace.
+    #import,file "Dumb_Table.jai";
+    ctx := make_dumb_table(data, ti) ;
     // Check if the Key_Type is a string
     if ctx.key_type != type_info(string) {
         report_json_error("Only Hash_Table with string as Key_Type is supported");
         return false, .{};
     }
 
-    if ctx.table.count {
-        for 0..ctx.table.entries.count - 1 {
-            entry := ctx.table.entries.data + (ctx.entry_type.runtime_size * it);
-            hash := entry.(*u32).*;
+    for ctx {
+        kv: Key_Value;
+        kv.key = copy_string(it_index.(*string).*);
 
-            if hash < FIRST_VALID_HASH continue;
+        ok, v := to_json(it, ctx.value_type);
+        if !ok return false, .{};
 
-            kv: Key_Value;
-            key_ptr := entry + ctx.entry_type.members[1].offset_in_bytes;
-            value_ptr := entry + ctx.entry_type.members[2].offset_in_bytes;
-
-            kv.key = key_ptr.(*string).*;
-
-            ok, v := to_json(value_ptr, ctx.value_type);
-            if !ok return false, .{};
-
-            kv.value = v;
-            array_add(*root.object, kv);
-        }
+        kv.value = v;
+        array_add(*root.object, kv);
     }
 
     return true, root;
