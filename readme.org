@@ -2,6 +2,9 @@
 
 This is a json parser in Jai. Tested in beta 0.2.024
 
+There is a breaking change in the parser, where the result or success
+bool is returned as the first value, which is encouraged in Jai.
+
 * Background
 I was trying to do some lsp work for fun, and decided to write my own
 json parser.
@@ -23,17 +26,17 @@ Hash_Table with string as Key_Type is supported.
 There are a few functions you may want to use.
 
 #+begin_src jai-ts
-  json, result := parse_json(s);
+  result, json := parse_json(s);
 
   // or a helper function to read directly from file
-  json, result := parse_json_from_file(file_path);
+  result, json := parse_json_from_file(file_path);
 
   // Print the json
   formatted_json_string := json_print(json);
 
   apple: Fruit;
 
-  j, ok := to_json(*apple);
+  ok, j := to_json(*apple);
 
   result = from_json(json, *apple);
 #+end_src

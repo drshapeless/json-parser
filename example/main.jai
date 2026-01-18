@@ -11,7 +11,7 @@ test0 :: () {
     s := read_entire_file("example0.json");
     defer free(s);
 
-    json, result := parse_json(s);
+    result, json := parse_json(s);
     defer json_free(json);
     assert(result == .OK, "%", result);
     log("Test 0:");
@@ -32,7 +32,7 @@ test1 :: () {
     s := read_entire_file("example1.json");
     defer free(s);
 
-    json, result := parse_json(s);
+    result, json := parse_json(s);
     defer json_free(json);
     assert(result == .OK, "%", result);
 
@@ -85,7 +85,7 @@ test2 :: () {
     s := read_entire_file("example2.json");
     defer free(s);
 
-    json, result := parse_json(s);
+    result, json := parse_json(s);
     defer json_free(json);
     assert(result == .OK, "%", result);
 
@@ -117,7 +117,7 @@ test3 :: () {
     s := read_entire_file("example3.json");
     defer free(s);
 
-    json, result := parse_json(s);
+    result, json := parse_json(s);
     defer json_free(json);
     assert(result == .OK, "%", result);
 
@@ -155,7 +155,7 @@ test4 :: () {
     s := read_entire_file("example4.json");
     defer free(s);
 
-    json, result := parse_json(s);
+    result, json := parse_json(s);
     defer json_free(json);
     assert(result == .OK, "%", result);
 
@@ -190,7 +190,7 @@ test5 :: () {
     s := read_entire_file("example5.json");
     defer free(s);
 
-    json, result := parse_json(s);
+    result, json := parse_json(s);
     defer json_free(json);
     assert(result == .OK, "%", result);
 
@@ -206,13 +206,13 @@ test5 :: () {
         log("%: %", it_index, it);
     }
 
-    j, ok := to_json(*room);
+    ok, j := to_json(*room,, temp);
     if !ok {
         log("Failed deserialization");
         return;
     }
 
-    log("%", json_print(j));
+    log("%", json_print(j,, temp));
 
     log("\n");
 }

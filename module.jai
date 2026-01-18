@@ -54,7 +54,7 @@ Json_Result :: enum u32 {
     INVALID_HASH_TABLE;
 }
 
-parse_json :: (s: string) -> Json_Any, Json_Result {
+parse_json :: (s: string) -> Json_Result, Json_Any {
     lexer: Lexer;
     set_input_from_string(*lexer, s);
 
@@ -72,7 +72,7 @@ parse_json :: (s: string) -> Json_Any, Json_Result {
     while 1 {
         t := get_token(*lexer);
         if t.type == .ERROR {
-            return .{}, .LEXER_ERROR;
+            return .LEXER_ERROR, .{};
         } else if t.type == .EOF {
             break;
         }
@@ -87,7 +87,7 @@ parse_json :: (s: string) -> Json_Any, Json_Result {
                 root.type = .ARRAY;
                 state = .VALUE;
             case;
-                return .{}, .EXPECT_OBJECT_OR_ARRAY;
+                return .EXPECT_OBJECT_OR_ARRAY, .{};
             }
         case .KEY;
             if t.type == {
@@ -100,16 +100,16 @@ parse_json :: (s: string) -> Json_Any, Json_Result {
                     pop(*stack);
                     state = .COMMA_OR_END;
                 } else {
-                    return .{}, .MISMATCH_BRACE;
+                    return .MISMATCH_BRACE, .{};
                 }
             case;
-                return .{}, .EXPECT_KEY;
+                return .EXPECT_KEY, .{};
             }
         case .COLON;
             if t.type == .COLON {
                 state = .VALUE;
             } else {
-                return .{}, .EXPECT_COLON;
+                return .EXPECT_COLON, .{};
             }
         case .COMMA_OR_END;
             if t.type == {
@@ -130,7 +130,7 @@ parse_json :: (s: string) -> Json_Any, Json_Result {
                     // still .COMMA_OR_END
                     pop(*stack);
                 } else {
-                    return .{}, .MISMATCH_BRACE;
+                    return .MISMATCH_BRACE, .{};
                 }
             case .R_BRACK;
                 parent := peek(stack);
@@ -138,10 +138,10 @@ parse_json :: (s: string) -> Json_Any, Json_Result {
                     // Same as stated above
                     pop(*stack);
                 } else {
-                    return .{}, .MISMATCH_BRACKET;
+                    return .MISMATCH_BRACKET, .{};
                 }
             case;
-                return .{}, .EXPECT_COMMA;
+                return .EXPECT_COMMA, .{};
             }
         case .VALUE;
             if t.type == {
@@ -232,23 +232,23 @@ parse_json :: (s: string) -> Json_Any, Json_Result {
                     pop(*stack);
                     state = .COMMA_OR_END;
                 } else {
-                    return .{}, .MISMATCH_BRACKET;
+                    return .MISMATCH_BRACKET, .{};
                 }
             case;
-                return .{}, .EXPECT_VALUE;
+                return .EXPECT_VALUE, .{};
             }
         }
     }
 
-    return root, .OK;
+    return .OK, root;
 }
 
-parse_json_from_file :: (file_path: string) -> Json_Any, Json_Result {
+parse_json_from_file :: (file_path: string) -> Json_Result, Json_Any {
     s, ok := read_entire_file(file_path);
-    if !ok return .{}, .FILE_NOT_FOUND;
+    if !ok return .FILE_NOT_FOUND, .{};
 
-    j, r := parse_json(s);
-    return j, r;
+    r, j := parse_json(s);
+    return r, j;
 }
 
 json_free :: (json: Json_Any) {
@@ -339,19 +339,19 @@ json_print :: (value: Json_Any, indent: bool = false, indent_level: int = 0, ind
 }
 
 // Return Json_Any object of type NULL if nothing is matched.
-json_get :: (value: Json_Any, key: string) -> Json_Any, ok:bool {
-    if value.type != .OBJECT return .{}, false;
+json_get :: (value: Json_Any, key: string) -> ok:bool, Json_Any {
+    if value.type != .OBJECT return false, .{};
 
     for value.object {
         if it.key == key {
-            return it.value, true;
+            return true, it.value;
         }
     }
 
-    return .{}, false;
+    return false, .{};
 }
 
-to_json :: (data: *void, ti: *Type_Info) -> Json_Any, success:bool {
+to_json :: (data: *void, ti: *Type_Info) -> success:bool, Json_Any {
     root: Json_Any;
     success := true;
 
@@ -403,9 +403,9 @@ to_json :: (data: *void, ti: *Type_Info) -> Json_Any, success:bool {
 
         arr_view := cast(*Array_View_64)data;
         for 0..arr_view.count - 1 {
-            v, ok := to_json(cast(*u8)arr_view.data + t.element_type.runtime_size * it, t.element_type);
+            ok, v := to_json(cast(*u8)arr_view.data + t.element_type.runtime_size * it, t.element_type);
             if !ok {
-                return .{}, false;
+                return false, .{};
             }
 
             array_add(*root.array, v);
@@ -428,25 +428,25 @@ to_json :: (data: *void, ti: *Type_Info) -> Json_Any, success:bool {
             // should be unnecessary.
             if t.members[0].type.type != .TYPE {
                 report_json_error("Only tagged union tagged with Type is supported");
-                return .{}, false;
+                return false, .{};
             }
 
             ptr := cast(*u8)data;
             ptr += size_of(Type);
 
             // Casting a Type to *Type_Info is valid but unsafe.
-            root, success = to_json(ptr, (cast(**Type_Info)data).*);
+            success, root = to_json(ptr, (cast(**Type_Info)data).*);
         } else if is_hash_table(ti) {
-            root, success = to_json_hash_table(data, ti);
+            success, root = to_json_hash_table(data, ti);
         } else {
             root.type = .OBJECT;
             for t.members {
                 kv: Key_Value;
                 kv.key = copy_string(it.name);
 
-                v, ok := to_json(cast(*u8)data + it.offset_in_bytes, it.type);
+                ok, v := to_json(cast(*u8)data + it.offset_in_bytes, it.type);
                 if !ok {
-                    return .{}, false;
+                    return false, .{};
                 }
                 kv.value = v;
 
@@ -469,20 +469,20 @@ to_json :: (data: *void, ti: *Type_Info) -> Json_Any, success:bool {
 
             // By the recursive nature of this thing, all pointer
             // would be deference to hell.
-            root, success = to_json(new_data, new_ti);
+            success, root = to_json(new_data, new_ti);
         }
     case .ANY;
         a := cast(*Any)data;
-        root, success = to_json(a.value_pointer, a.type);
+        success, root = to_json(a.value_pointer, a.type);
     }
 
-    return root, success;
+    return success, root;
 }
 
-to_json :: (value: *$T) -> Json_Any, success:bool {
-    root, ok := to_json(value, type_info(T));
+to_json :: (value: *$T) -> success:bool, Json_Any {
+    ok, root := to_json(value, type_info(T));
 
-    return root, ok;
+    return ok, root;
 }
 
 from_json :: (json: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
@@ -531,7 +531,7 @@ from_json :: (json: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
                 return from_json_hash_table(json, data, ti);
             } else {
                 for t.members {
-                    v, ok := json_get(json, it.name);
+                    ok, v := json_get(json, it.name);
                     if !ok continue;
 
                     result := from_json(v, cast(*u8)data + it.offset_in_bytes, it.type);
@@ -1052,7 +1052,7 @@ from_json_tagged_union :: (json: Json_Any, data: *void, ti: *Type_Info) -> Json_
 
 
 // This function is reference to table_printer.jai I found in the discord server.
-to_json_hash_table :: (data: *void, ti: *Type_Info) -> Json_Any, success:bool {
+to_json_hash_table :: (data: *void, ti: *Type_Info) -> success:bool, Json_Any {
     root: Json_Any;
     root.type = .OBJECT;
 
@@ -1061,7 +1061,7 @@ to_json_hash_table :: (data: *void, ti: *Type_Info) -> Json_Any, success:bool {
     // Check if the Key_Type is a string
     if ctx.key_type != type_info(string) {
         report_json_error("Only Hash_Table with string as Key_Type is supported");
-        return .{}, false;
+        return false, .{};
     }
 
     if ctx.table.count {
@@ -1077,15 +1077,15 @@ to_json_hash_table :: (data: *void, ti: *Type_Info) -> Json_Any, success:bool {
 
             kv.key = key_ptr.(*string).*;
 
-            v, ok := to_json(value_ptr, ctx.value_type);
-            if !ok return .{}, false;
+            ok, v := to_json(value_ptr, ctx.value_type);
+            if !ok return false, .{};
 
             kv.value = v;
             array_add(*root.object, kv);
         }
     }
 
-    return root, true;
+    return true, root;
 }
 
 from_json_hash_table :: (json: Json_Any, data: *void, ti: *Type_Info) -> Json_Result {
