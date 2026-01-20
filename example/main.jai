@@ -206,7 +206,7 @@ test5 :: () {
         log("%: %", it_index, it);
     }
 
-    ok, j := to_json(*room,, temp);
+    ok, j := to_json(*room);
     if !ok {
         log("Failed deserialization");
         return;
