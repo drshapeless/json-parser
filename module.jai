@@ -660,7 +660,8 @@ is_tagged_union :: (ti: *Type_Info_Struct) -> bool {
 }
 
 is_hash_table :: (ti: *Type_Info) -> bool {
-    return ti.(*Type_Info_Struct).polymorph_source_struct == type_info(Table(void, void)).polymorph_source_struct;
+    // This is not a reliable way to check.
+    return ti.(*Type_Info_Struct).name == "Table";
 }
 
 from_json_integer :: (value: Json_Any, data: *void, ti: *Type_Info) {

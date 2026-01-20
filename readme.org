@@ -1,6 +1,6 @@
 #+title: readme
 
-This is a json parser in Jai. Tested in beta 0.2.024
+This is a json parser in Jai. Tested in beta 0.2.025
 
 There is a breaking change in the parser, where the result or success
 bool is returned as the first value, which is encouraged in Jai.

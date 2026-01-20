@@ -15,7 +15,7 @@ Dumb_Table_Ctx :: struct {
     entry_type:          *Type_Info_Struct;
     key_type:            *Type_Info;
     value_type:          *Type_Info;
-    given_hash_function:  #type (string) -> u32;
+    hash_function:       #type (string) -> u32;
     compare_function:    #type (string, string) -> bool;
     load_factor_percent: u32;
     refill_removed:      bool;
@@ -45,20 +45,9 @@ make_dumb_table :: (data: *void, ti: *Type_Info) -> Dumb_Table_Ctx {
     ctx.load_factor_percent = (*info.constant_storage[info.specified_parameters[4].offset_into_constant_storage]).(*u32).*;
     ctx.refill_removed = (*info.constant_storage[info.specified_parameters[5].offset_into_constant_storage]).(*bool).*;
 
-    // The reason we want given_hash_function instead of the member
-    // hash_function constant is because there is a bug in the
-    // compiler, (currently v0.2.024). If the given_hash_function is
-    // null, the real hash_function is not present in the constant
-    // storage in the type_info.
-    //
-    // If we get null given_hash_function, we would need to call
-    // Hash.get_hash() on our own.
-    //
-    // TODO: Once the bug if fixed, we would try to get the member
-    // hash_function instead.
-    ctx.given_hash_function = (*info.constant_storage[info.specified_parameters[2].offset_into_constant_storage]).(*void);
+    ctx.hash_function = (*info.constant_storage[info.members[6].offset_into_constant_storage]).(**void).*;
 
-    ctx.compare_function = (*info.constant_storage[info.members[7].offset_into_constant_storage]).(*void);
+    ctx.compare_function = (*info.constant_storage[info.members[7].offset_into_constant_storage]).(**void).*;
 
     ctx.table = cast(*Dumb_Table)data;
 
@@ -79,12 +68,7 @@ table_add :: (using ctx: Dumb_Table_Ctx, key: *void, value: *void) -> *void {
 
     // Since we assume key is always string
     key_str := key.(*string).*;
-    hash: u32;
-    if given_hash_function == null {
-        hash = given_hash_function(key_str);
-    } else {
-        hash = Hash.get_hash(key_str);
-    }
+    hash := hash_function(key_str);
 
     if hash < HT.FIRST_VALID_HASH {
         hash += HT.FIRST_VALID_HASH;
@@ -198,4 +182,3 @@ _internal_resize_memory :: (using ctx: Dumb_Table_Ctx, slots_to_allocate: s64 = 
 
 HT :: #import "Hash_Table";
 Basic :: #import "Basic";
-Hash :: #import "Hash";
